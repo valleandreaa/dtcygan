@@ -1,0 +1,81 @@
+clinical:
+  - name: tumor_size_at_diagnosis_mm
+    kind: numeric
+    minimum: 0.0
+    maximum: 250.0
+    decimals: 1
+    missing_rate: 0.58
+  - name: sarculator_survival_5y_prob
+    kind: numeric
+    minimum: 0.0
+    maximum: 1.0
+    decimals: 3
+    missing_rate: 0.71
+  - name: age_at_diagnosis_years
+    kind: numeric
+    minimum: 18
+    maximum: 95
+    decimals: 1
+  - name: tumor_depth
+    kind: categorical
+    categories: [Superficial, Deep, Bone]
+    missing_rate: 0.1
+  - name: histological_subtype
+    kind: categorical
+    categories:
+      - Intramuscular myxoma
+      - Undifferentiated/unclassified sarcoma
+      - Atypical lipomatous tumor
+      - Leiomyosarcoma
+      - Dedifferentiated liposarcoma
+      - Angiosarcoma of soft tissues
+      - Desmoid-type fibromatosis
+      - Solitary fibrous tumor
+      - Myxofibrosarcoma
+      - Myxoid liposarcoma
+      - Synovial sarcoma
+      - GIST
+      - Pleomorphic liposarcoma
+
+  - name: initial_metastatic_disease
+    kind: bernoulli
+    probability: 0.08
+    missing_rate: 0.2
+
+treatment:
+  - name: tumor_max_size_mm
+    kind: numeric
+    minimum: 0.0
+    maximum: 250.0
+    decimals: 1
+    missing_rate: 0.6
+  - name: chemotherapy_duration_days
+    kind: numeric
+    minimum: 0.0
+    maximum: 365.0
+    missing_rate: 0.8
+  - name: radiotherapy_total_dose_gy
+    kind: numeric
+    minimum: 0.0
+    maximum: 75.0
+    decimals: 1
+    missing_rate: 0.8
+  - name: chemotherapy_type
+    kind: categorical
+    categories: [Cytotoxic, Targeted]
+    missing_rate: 0.6
+  - name: treatment_status
+    kind: categorical
+    categories: [NED, AWD, DOD]
+    missing_rate: 0.3
+
+actual_treatment:
+  - name: episodes.surgery
+    kind: bernoulli
+    probability: 0.6
+  - name: episodes.chemotherapy
+    kind: bernoulli
+    probability: 0.4
+  - name: episodes.radiotherapy
+    kind: bernoulli
+    probability: 0.5

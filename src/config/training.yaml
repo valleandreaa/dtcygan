@@ -1,0 +1,16 @@
+seq_len: 8
+batch_size: 32
+epochs: 250
+lr_g: 4.0e-5
+lr_d: 5.0e-5
+beta1: 0.5
+beta2: 0.999
+lambda_cyc: 20.0
+lambda_id: 30.0
+g_hidden: 256
+d_hidden: 128
+num_layers: 3
+seed: 42
+device: null
+adv_loss: lsgan
+criterion: l1
