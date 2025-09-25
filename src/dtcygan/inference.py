@@ -8,7 +8,7 @@ from typing import Dict, List, Optional
 
 import torch
 
-from ditcygan.training import (
+from dtcygan.training import (
     Config,
     SyntheticSequenceDataset,
     LSTMGenerator,

@@ -12,7 +12,7 @@ SRC_DIR = ROOT / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
-from ditcygan.validation import (
+from dtcygan.validation import (
     score_binary_classifier,
     load_predictions,
     bootstrap_statistic,

@@ -17,7 +17,7 @@ import yaml
 import json
 from datetime import datetime
 
-from ditcygan.synthetic import generate_dataset
+from dtcygan.synthetic import generate_dataset
 
 os.environ.setdefault("CUDA_LAUNCH_BLOCKING", "1")
 
@@ -517,7 +517,7 @@ def train(
 
     checkpoint_dir = Path(checkpoint_dir)
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
-    ckpt_path = checkpoint_dir / f"ditcygan_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pt"
+    ckpt_path = checkpoint_dir / f"dtcygan_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pt"
     torch.save(
         {
             "config": cfg.__dict__,

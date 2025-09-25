@@ -12,7 +12,7 @@ SRC_DIR = ROOT / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
-from ditcygan.inference import generate_counterfactuals
+from dtcygan.inference import generate_counterfactuals
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
