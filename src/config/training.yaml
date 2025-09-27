@@ -1,6 +1,6 @@
 seq_len: 8
 batch_size: 32
-epochs: 250
+epochs: 50
 lr_g: 4.0e-5
 lr_d: 5.0e-5
 beta1: 0.5
@@ -14,3 +14,85 @@ seed: 42
 device: null
 adv_loss: lsgan
 criterion: l1
+clinical_features:
+  numeric:
+    - age_at_diagnosis_years
+    - tumour_size_at_diagnosis_mm
+    - resection_margin_width_mm
+    - sarculator_survival_5y_prob
+    - sarculator_survival_10y_prob
+    - charlson_comorbidity_index
+    - time_from_biopsy_to_histological_diagnosis_days
+  one_hot:
+    - sex
+    - anatomical_site
+    - side_of_lesion
+    - depth_of_tumour
+    - histological_subtype
+    - pre_treatment_biopsy
+    - local_situation_at_diagnosis
+    - initial_metastatic_disease
+    - barrier_at_resection_margin
+  ordinal:
+    fnclcc_grade:
+      Benign: 0
+      G1: 1
+      G2: 2
+      G3: 3
+    ajcc_uicc_stage:
+      IA: 1
+      IB: 2
+      IIA: 3
+      IIB: 4
+      II: 5
+      IIIA: 6
+      IIIB: 7
+      III: 8
+      IV: 9
+    mitotic_count_category:
+      '0-9': 1
+      '10-19': 2
+      '>29': 3
+    necrosis_percentage_category:
+      '<10%': 1
+      '10-20%': 2
+      '21-30%': 3
+      '31-40%': 4
+      '41-50%': 5
+      '51-60%': 6
+      '71-80%': 7
+treatment_features:
+  numeric:
+    - tumour_size_before_treatment_mm
+    - number_of_reoperations
+    - radiotherapy_total_dose_gy
+    - radiotherapy_fraction_count
+    - radiotherapy_dose_per_fraction_gy
+    - chemotherapy_cycles
+    - chemotherapy_duration_days
+    - patient_reported_outcome_score
+    - chemotherapy_administered
+    - radiotherapy_administered
+    - surgery_performed
+  one_hot:
+    - chemotherapy_regimen
+    - radiotherapy_modality
+    - surgery_type
+    - radiotherapy_indication
+    - radiation_oncology_indication
+    - reason_for_chemotherapy
+    - chemotherapy_indication
+    - ecteinascidin_743_use
+    - doxorubicin_use
+    - chemotherapy_discontinuation_reason
+    - treatment_endpoint_category
+    - status_at_last_follow_up
+    - chemotherapy_response
+    - chemotherapy_type
+    - surgery_complication_severity
+    - type_of_index_surgery
+  ordinal:
+    surgery_margin_status:
+      R0: 1
+      R1: 2
+      R2: 3

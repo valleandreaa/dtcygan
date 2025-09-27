@@ -4,8 +4,11 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
+
+os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
 
 ROOT = Path(__file__).resolve().parent
 SRC_DIR = ROOT / "src"
