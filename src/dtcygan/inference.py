@@ -65,9 +65,10 @@ def generate_counterfactuals(
         cond_actual = data["actual_treatment"].unsqueeze(0).to(device)
         mask = data["mask_clin"].unsqueeze(0).to(device)
         step_mask = (mask.sum(dim=3, keepdim=True) > 0).float()
+        cond_actual = cond_actual * step_mask
 
         scenarios = {"actual": cond_actual}
-        cond_random = random_condition(cond_actual)
+        cond_random = random_condition(cond_actual) * step_mask
         scenarios["random"] = cond_random
         if scenario_names:
             for name in scenario_names:

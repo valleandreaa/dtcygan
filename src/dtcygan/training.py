@@ -189,11 +189,18 @@ class SyntheticSequenceDataset(Dataset):
         treat_vals, treat_mask = self._encode_records(
             patient.get("treatment", []), self.treat_columns, self.treat_categorical, self.treat_categories
         )
-        actual_vals, _ = self._encode_actual(patient.get("actual_treatment", []))
+        actual_vals, actual_mask = self._encode_actual(patient.get("actual_treatment", []))
+        raw_len = actual_vals.shape[0]
+        if raw_len:
+            base_vals = actual_vals[:1]
+            base_mask = actual_mask[:1]
+            actual_vals = np.repeat(base_vals, raw_len, axis=0)
+            actual_mask = np.repeat(base_mask, raw_len, axis=0)
 
         clin_vals = self._pad(clin_vals, self.seq_len)
         treat_vals = self._pad(treat_vals, self.seq_len)
         actual_vals = self._pad(actual_vals, self.seq_len)
+        actual_mask = self._pad(actual_mask, self.seq_len)
         clin_mask = self._pad(clin_mask, self.seq_len)
         treat_mask = self._pad(treat_mask, self.seq_len)
 
@@ -203,6 +210,7 @@ class SyntheticSequenceDataset(Dataset):
             "actual_treatment": torch.from_numpy(actual_vals),
             "mask_clin": torch.from_numpy(clin_mask),
             "mask_treat": torch.from_numpy(treat_mask),
+            "mask_actual": torch.from_numpy(actual_mask),
         }
 
 
@@ -229,9 +237,19 @@ def masked_reconstruction_loss(pred: torch.Tensor, target: torch.Tensor, mask: t
 
 
 def random_condition(cond: torch.Tensor) -> torch.Tensor:
-    batch, steps, num_classes = cond.shape
-    indices = torch.randint(0, num_classes, (batch, steps), device=cond.device)
-    return torch.nn.functional.one_hot(indices, num_classes=num_classes).float()
+    """Generate counterfactual treatment indicators retaining at least one active modality."""
+    if cond.dim() != 3:
+        raise ValueError("Condition tensor must be of shape [batch, steps, features].")
+
+    noise = torch.bernoulli(cond.new_full(cond.shape, 0.5))
+    randomized = torch.clamp(cond + noise, max=1.0)
+
+    zero_mask = randomized.sum(dim=2, keepdim=True) == 0
+    if zero_mask.any():
+        choices = torch.randint(cond.size(2), (cond.size(0), cond.size(1), 1), device=cond.device)
+        randomized = randomized.scatter(2, choices, torch.ones_like(choices, dtype=randomized.dtype))
+
+    return randomized
 
 
 def split_dataset(dataset: Dataset, val_fraction: float, seed: int) -> Tuple[Dataset, Dataset]:
@@ -289,7 +307,8 @@ def train_epoch(
         step_mask = ((mask_clin.sum(dim=2, keepdim=True) + mask_treat.sum(dim=2, keepdim=True)) > 0).float()
         x_clin = x_clin * step_mask
         x_treat = x_treat * step_mask
-        cond_random = random_condition(cond)
+        cond = cond * step_mask
+        cond_random = random_condition(cond) * step_mask
 
         ones = torch.ones_like(step_mask)
         zeros = torch.zeros_like(step_mask)
@@ -391,7 +410,8 @@ def evaluate_epoch(
             step_mask = ((mask_clin.sum(dim=2, keepdim=True) + mask_treat.sum(dim=2, keepdim=True)) > 0).float()
             x_clin = x_clin * step_mask
             x_treat = x_treat * step_mask
-            cond_random = random_condition(cond)
+            cond = cond * step_mask
+            cond_random = random_condition(cond) * step_mask
 
             ones = torch.ones_like(step_mask)
             zeros = torch.zeros_like(step_mask)
@@ -460,7 +480,7 @@ def train(
     timesteps: Optional[int] = None,
     seed: Optional[int] = None,
     schema_path: Optional[str] = None,
-    checkpoint_dir: str | Path = "checkpoints",
+    checkpoint_dir: str | Path = "data/models",
 ) -> Path:
     run_seed = seed if seed is not None else cfg.seed
     set_seed(run_seed)

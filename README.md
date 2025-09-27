@@ -1,13 +1,37 @@
 # dtcygan
 
-## Python Setup
+## Setup
 - Target Python version: 3.12.
-- Install dependencies with: pip install -r requirements.txt
+- Create a Conda environment:
+  ```bash
+  conda create -n dtcygan-env python=3.12
+  conda activate dtcygan-env
+  ```
+- Install dependencies with:
+  ```bash
+  pip install -r requirements.txt
+  ```
 
-## Docker Usage
-1. Build the image: docker compose build
-2. Start an interactive shell: docker compose run --rm app
-3. Run project commands inside the container from /workspace
-4. Stop any lingering containers: docker compose down (if you started services in detached mode)
+## Generate synthetic data
+The `generate_data.py` CLI writes a JSON dataset using the schema in `src/config/synthetic.yaml`.
 
-The provided Dockerfile uses the official python:3.12-slim base image and installs the packages listed in requirements.txt.
+Example (matches the VS Code launch configuration):
+
+```bash
+python generate_data.py \
+  --patients 25 \
+  --timesteps 5 \
+  --output data/syntects.json \
+  --schema src/config/synthetic.yaml
+```
+
+Arguments:
+
+- `--patients`: number of patient records to simulate (default `25`).
+- `--timesteps`: sequence length per patient (default `5`).
+- `--seed`: RNG seed for reproducibility (default `42`).
+- `--output`: destination JSON path (parent folders created, file overwritten).
+- `--indent`: pretty-printing indent (`2` by default, use `0` for compact).
+- `--schema`: path to the synthetic schema; omit to use the package default.
+
+The script overwrites the output file if it already exists. Ensure you run it from the project root (or set `PYTHONPATH=src`) so the `dtcygan` package is importable.

@@ -6,14 +6,10 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent
-SRC_DIR = ROOT / "src"
-if str(SRC_DIR) not in sys.path:
-    sys.path.insert(0, str(SRC_DIR))
 
 from dtcygan.synthetic import generate_dataset
+from dtcygan.utils import prepare_output_path
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
@@ -33,8 +29,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--schema",
         type=str,
-        default=str(SRC_DIR / "config" / "synthetic.yaml"),
-        help="Schema file describing feature distributions (default: synthetic.yaml).",
+        default=None,
+        help="Schema file describing feature distributions (defaults to package schema when omitted).",
     )
     return parser
 
@@ -51,8 +47,7 @@ def write_synthetic_dataset(args: argparse.Namespace) -> None:
         schema_path=args.schema,
     )
 
-    output_path = Path(args.output)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path = prepare_output_path(args.output)
 
     indent = None if args.indent <= 0 else args.indent
     with output_path.open("w", encoding="utf-8") as fh:

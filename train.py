@@ -23,7 +23,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--patients", type=int, default=64, help="Number of synthetic patients when generating data (default: 64)")
     parser.add_argument("--timesteps", type=int, default=8, help="Sequence length for generated patients (default: 8)")
     parser.add_argument("--seed", type=int, help="Optional RNG seed for dataset generation (overrides config seed)")
-    parser.add_argument("--checkpoint-dir", type=str, default="checkpoints", help="Directory where model checkpoints are written")
+    parser.add_argument(
+        "--checkpoint-dir",
+        type=str,
+        default=str(ROOT / "data" / "models"),
+        help="Directory where model checkpoints are written (default: data/models)",
+    )
     return parser
 
 

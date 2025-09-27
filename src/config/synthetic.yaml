@@ -1,81 +1,310 @@
 clinical:
-  - name: tumor_size_at_diagnosis_mm
-    kind: numeric
-    minimum: 0.0
-    maximum: 250.0
-    decimals: 1
-    missing_rate: 0.58
-  - name: sarculator_survival_5y_prob
-    kind: numeric
-    minimum: 0.0
-    maximum: 1.0
-    decimals: 3
-    missing_rate: 0.71
+  - name: sex
+    kind: categorical
+    categories:
+      - Female
+      - Male
+    probabilities: [0.511, 0.489]
+    missing_rate: 0.15
   - name: age_at_diagnosis_years
     kind: numeric
     minimum: 18
-    maximum: 95
-    decimals: 1
-  - name: tumor_depth
+    maximum: 100
+    decimals: 0
+    missing_rate: 0.15
+  - name: anatomical_site
+    kind: categorical
+    categories:
+      - Head/neck
+      - Intrathoracic C-spine
+      - Abdominal
+      - Uterus
+      - Other visceral
+      - Pelvis
+      - Acetabulum
+      - Axilla/scapula
+      - Clavicle
+      - Humerus
+      - Elbow
+      - Hand
+      - Femur
+      - Knee
+      - Tibia
+      - Foot
+    probabilities: [0.1495, 0.0047, 0.1542, 0.1449, 0.0654, 0.0187, 0.0047, 0.1168, 0.0187, 0.014, 0.0374, 0.0047, 0.0888, 0.0841, 0.0607, 0.0327]
+    missing_rate: 0.15
+  - name: side_of_lesion
+    kind: categorical
+    categories:
+      - Left
+      - Right
+      - Midline
+    probabilities: [0.4772, 0.418, 0.1048]
+    missing_rate: 0.15
+  - name: depth_of_tumour
     kind: categorical
     categories: [Superficial, Deep, Bone]
-    missing_rate: 0.1
+    probabilities: [0.117, 0.818, 0.065]
+    missing_rate: 0.15
+  - name: tumour_size_at_diagnosis_mm
+    kind: numeric
+    minimum: 0
+    maximum: 350
+    decimals: 1
+    missing_rate: 0.15
   - name: histological_subtype
     kind: categorical
     categories:
       - Intramuscular myxoma
-      - Undifferentiated/unclassified sarcoma
-      - Atypical lipomatous tumor
-      - Leiomyosarcoma
+      - Atypical lipomatous tumor / well-differentiated liposarcoma
       - Dedifferentiated liposarcoma
-      - Angiosarcoma of soft tissues
+      - Myxoid liposarcoma
+      - Pleomorphic liposarcoma
       - Desmoid-type fibromatosis
       - Solitary fibrous tumor
       - Myxofibrosarcoma
-      - Myxoid liposarcoma
+      - Leiomyosarcoma
+      - Angiosarcoma of soft tissues
       - Synovial sarcoma
+      - Undifferentiated/unclassified sarcoma
       - GIST
-      - Pleomorphic liposarcoma
-
+    probabilities: [0.142, 0.13, 0.093, 0.043, 0.021, 0.072, 0.07, 0.05, 0.106, 0.086, 0.031, 0.135, 0.021]
+    missing_rate: 0.15
+  - name: fnclcc_grade
+    kind: categorical
+    categories: [Benign, G1, G2, G3]
+    probabilities: [0.0896, 0.2959, 0.2166, 0.398]
+    missing_rate: 0.15
+  - name: ajcc_uicc_stage
+    kind: categorical
+    categories: [IA, IB, IIA, IIB, II, IIIA, IIIB, III, IV]
+    probabilities: [0.1248, 0.1426, 0.0162, 0.0551, 0.1426, 0.2269, 0.235, 0.0146, 0.0421]
+    missing_rate: 0.15
+  - name: pre_treatment_biopsy
+    kind: categorical
+    categories: [No, Yes]
+    probabilities: [0.9764, 0.0236]
+    missing_rate: 0.15
+  - name: local_situation_at_diagnosis
+    kind: categorical
+    categories:
+      - No prior interventions
+      - Whoops
+      - Locally advanced incl. pathological fracture
+    probabilities: [0.8517, 0.1441, 0.0042]
+    missing_rate: 0.15
   - name: initial_metastatic_disease
-    kind: bernoulli
-    probability: 0.08
-    missing_rate: 0.2
+    kind: categorical
+    categories: [No, Yes]
+    probabilities: [0.9677, 0.0323]
+    missing_rate: 0.15
+  - name: barrier_at_resection_margin
+    kind: categorical
+    categories: [Periosteum, Fascia]
+    probabilities: [0.027, 0.973]
+    missing_rate: 0.15
+  - name: resection_margin_width_mm
+    kind: numeric
+    minimum: 0
+    maximum: 30
+    decimals: 2
+    missing_rate: 0.15
+  - name: sarculator_survival_5y_prob
+    kind: numeric
+    minimum: 0.0
+    maximum: 1.0
+    decimals: 2
+    missing_rate: 0.15
+  - name: sarculator_survival_10y_prob
+    kind: numeric
+    minimum: 0.0
+    maximum: 1.0
+    decimals: 2
+    missing_rate: 0.15
+  - name: mitotic_count_category
+    kind: categorical
+    categories: ['0-9', '10-19', '>29']
+    probabilities: [0.6219, 0.2187, 0.1594]
+    missing_rate: 0.15
+  - name: necrosis_percentage_category
+    kind: categorical
+    categories: ['<10%', '10-20%', '21-30%', '31-40%', '41-50%', '51-60%', '71-80%']
+    probabilities: [0.7034, 0.1421, 0.048, 0.048, 0.0195, 0.0195, 0.0195]
+    missing_rate: 0.15
+  - name: charlson_comorbidity_index
+    kind: integer
+    minimum: 0
+    maximum: 12
+    missing_rate: 0.15
+  - name: time_from_biopsy_to_histological_diagnosis_days
+    kind: numeric
+    minimum: 0
+    maximum: 1500
+    decimals: 0
+    missing_rate: 0.15
 
 treatment:
-  - name: tumor_max_size_mm
-    kind: numeric
-    minimum: 0.0
-    maximum: 250.0
-    decimals: 1
-    missing_rate: 0.6
-  - name: chemotherapy_duration_days
-    kind: numeric
-    minimum: 0.0
-    maximum: 365.0
-    missing_rate: 0.8
+  - name: chemotherapy_administered
+    kind: bernoulli
+    probability: 0.55
+    missing_rate: 0.0
+  - name: chemotherapy_regimen
+    kind: categorical
+    categories:
+      - Anthracycline-based combination
+      - Ifosfamide-based
+      - Taxane-based
+      - Targeted therapy
+      - Other/experimental
+    probabilities: [0.32, 0.24, 0.18, 0.16, 0.1]
+    missing_rate: 0.15
+  - name: chemotherapy_cycles
+    kind: integer
+    minimum: 0
+    maximum: 8
+    missing_rate: 0.15
+  - name: chemotherapy_response
+    kind: categorical
+    categories: [Complete response, Partial response, Stable disease, Progressive disease]
+    probabilities: [0.12, 0.46, 0.28, 0.14]
+    missing_rate: 0.15
+  - name: radiotherapy_administered
+    kind: bernoulli
+    probability: 0.48
+    missing_rate: 0.0
+  - name: radiotherapy_modality
+    kind: categorical
+    categories: [3D-CRT, IMRT, Proton therapy, Brachytherapy]
+    probabilities: [0.45, 0.35, 0.05, 0.15]
+    missing_rate: 0.15
   - name: radiotherapy_total_dose_gy
     kind: numeric
-    minimum: 0.0
-    maximum: 75.0
+    minimum: 0
+    maximum: 75
     decimals: 1
-    missing_rate: 0.8
-  - name: chemotherapy_type
+    missing_rate: 0.552
+  - name: radiotherapy_fraction_count
+    kind: integer
+    minimum: 0
+    maximum: 35
+    missing_rate: 0.539
+  - name: surgery_performed
+    kind: bernoulli
+    probability: 0.62
+    missing_rate: 0.0
+  - name: surgery_type
     kind: categorical
-    categories: [Cytotoxic, Targeted]
-    missing_rate: 0.6
-  - name: treatment_status
+    categories: [Wide excision, Limb-sparing resection, Amputation, Debulking]
+    probabilities: [0.58, 0.27, 0.05, 0.1]
+    missing_rate: 0.15
+  - name: surgery_margin_status
+    kind: categorical
+    categories: [R0, R1, R2]
+    probabilities: [0.7556, 0.2139, 0.0305]
+    missing_rate: 0.15
+  - name: surgery_complication_severity
+    kind: categorical
+    categories: [None, Minor, Major]
+    probabilities: [0.7, 0.2, 0.1]
+    missing_rate: 0.15
+  - name: tumour_size_before_treatment_mm
+    kind: numeric
+    minimum: 0
+    maximum: 350
+    decimals: 1
+    missing_rate: 0.359
+  - name: type_of_index_surgery
+    kind: categorical
+    categories:
+      - First surgery reason
+      - After whoops
+      - Pathological fracture
+      - Other reason
+    probabilities: [0.9953, 0.0016, 0.0016, 0.0016]
+    missing_rate: 0.357
+  - name: number_of_reoperations
+    kind: integer
+    minimum: 0
+    maximum: 5
+    missing_rate: 0.363
+  - name: radiotherapy_indication
+    kind: categorical
+    categories: [Preoperative, Postoperative, Definitive, Palliative, Other/unknown]
+    probabilities: [0.7162, 0.1034, 0.0663, 0.1061, 0.008]
+    missing_rate: 0.623
+  - name: radiotherapy_dose_per_fraction_gy
+    kind: numeric
+    minimum: 0.0
+    maximum: 10.0
+    decimals: 2
+    missing_rate: 0.552
+  - name: radiation_oncology_indication
+    kind: categorical
+    categories: [Preoperative, Postoperative, Palliative, Stereotactic]
+    probabilities: [0.7929, 0.0764, 0.1229, 0.0078]
+    missing_rate: 0.503
+  - name: reason_for_chemotherapy
+    kind: categorical
+    categories: [Neoadjuvant, Adjuvant, Palliative]
+    probabilities: [0.108, 0.101, 0.791]
+    missing_rate: 0.0
+  - name: chemotherapy_indication
+    kind: categorical
+    categories:
+      - Curative intent: neoadjuvant
+      - Curative intent: adjuvant
+      - Palliative intent: maintenance
+      - Palliative intent: treatment pressure
+    probabilities: [0.2382, 0.1203, 0.0448, 0.5967]
+    missing_rate: 0.0
+  - name: ecteinascidin_743_use
+    kind: categorical
+    categories: [Yes, No]
+    probabilities: [0.0512, 0.9488]
+    missing_rate: 0.0
+  - name: doxorubicin_use
+    kind: categorical
+    categories: [Yes, No]
+    probabilities: [0.146, 0.854]
+    missing_rate: 0.0
+  - name: chemotherapy_duration_days
+    kind: numeric
+    minimum: 0
+    maximum: 1500
+    decimals: 0
+    missing_rate: 0.772
+  - name: chemotherapy_discontinuation_reason
+    kind: categorical
+    categories: [Planned, Toxicity, Progressive disease]
+    probabilities: [0.625, 0.0855, 0.2895]
+    missing_rate: 0.848
+  - name: treatment_endpoint_category
+    kind: categorical
+    categories: [LR, MET]
+    probabilities: [0.3069, 0.6931]
+    missing_rate: 0.609
+  - name: status_at_last_follow_up
     kind: categorical
     categories: [NED, AWD, DOD]
-    missing_rate: 0.3
+    probabilities: [0.5585, 0.3949, 0.0466]
+    missing_rate: 0.291
+  - name: patient_reported_outcome_score
+    kind: numeric
+    minimum: 0.0
+    maximum: 1.0
+    decimals: 3
+    missing_rate: 0.714
 
 actual_treatment:
-  - name: episodes.surgery
-    kind: bernoulli
-    probability: 0.6
   - name: episodes.chemotherapy
     kind: bernoulli
-    probability: 0.4
+    probability: 0.5
+    missing_rate: 0.0
   - name: episodes.radiotherapy
     kind: bernoulli
-    probability: 0.5
+    probability: 0.45
+    missing_rate: 0.0
+  - name: episodes.surgery
+    kind: bernoulli
+    probability: 0.65
+    missing_rate: 0.0
