@@ -6,7 +6,7 @@ import os
 import random
 from dataclasses import dataclass, field, fields
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -26,6 +26,34 @@ os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
 
 @dataclass
 class Config:
+    '''
+    Dataclass carrying all hyperparameters required for CycleGAN training.
+
+    args:
+    - seq_len: sequence length per patient [int]
+    - batch_size: samples per mini-batch [int]
+    - epochs: number of training epochs [int]
+    - lr_g: generator learning rate [float]
+    - lr_d: discriminator learning rate [float]
+    - beta1: first momentum coefficient [float]
+    - beta2: second momentum coefficient [float]
+    - opt_gen: optimizer identifier for generators [str]
+    - opt_disc: optimizer identifier for discriminators [str]
+    - lambda_cyc: cycle-consistency weight [float]
+    - lambda_id: identity penalty weight [float]
+    - g_hidden: generator hidden dimension [int]
+    - d_hidden: discriminator hidden dimension [int]
+    - num_layers: LSTM depth [int]
+    - seed: random seed [int]
+    - device: preferred torch device [str | None]
+    - adv_loss: adversarial loss key [str]
+    - criterion: reconstruction loss key [str]
+    - clinical_features: clinical feature spec [Dict]
+    - treatment_features: treatment feature spec [Dict]
+
+    return:
+    - Config: populated configuration object [Config]
+    '''
     seq_len: int = 8
     batch_size: int = 32
     epochs: int = 200
@@ -33,6 +61,8 @@ class Config:
     lr_d: float = 5.0e-5
     beta1: float = 0.5
     beta2: float = 0.999
+    opt_gen: str = "adam"
+    opt_disc: str = "adam"
     lambda_cyc: float = 20.0
     lambda_id: float = 30.0
     g_hidden: int = 256
@@ -47,6 +77,15 @@ class Config:
 
 
 def load_config(path: str | Path) -> Config:
+    '''
+    Load YAML configuration file and build a Config instance.
+
+    args:
+    - path: path to YAML file [str | Path]
+
+    return:
+    - cfg: parsed configuration [Config]
+    '''
     with open(path, "r", encoding="utf-8") as fh:
         raw = yaml.safe_load(fh) or {}
     allowed = {f.name for f in fields(Config)}
@@ -55,6 +94,15 @@ def load_config(path: str | Path) -> Config:
 
 
 def set_seed(seed: int) -> None:
+    '''
+    Seed Python, NumPy, and PyTorch RNGs for reproducibility.
+
+    args:
+    - seed: random seed value [int]
+
+    return:
+    - None: function mutates global RNG state [None]
+    '''
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
@@ -62,27 +110,175 @@ def set_seed(seed: int) -> None:
         torch.cuda.manual_seed_all(seed)
 
 
-def get_adversarial_loss(name: str) -> nn.Module:
+def adversarial_loss(output: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+    '''
+    Binary cross-entropy adversarial loss operating on logits.
+
+    args:
+    - output: discriminator predictions [torch.Tensor]
+    - target: label tensor of ones or zeros [torch.Tensor]
+
+    return:
+    - loss: scalar loss value [torch.Tensor]
+    '''
+    return F.binary_cross_entropy_with_logits(output, target)
+
+
+def least_squares_gan_loss(output: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+    '''
+    Least-squares GAN criterion using mean-squared error.
+
+    args:
+    - output: discriminator predictions [torch.Tensor]
+    - target: regression targets [torch.Tensor]
+
+    return:
+    - loss: scalar loss value [torch.Tensor]
+    '''
+    return F.mse_loss(output, target)
+
+
+def hinge_loss(output: torch.Tensor, is_real: bool) -> torch.Tensor:
+    '''
+    Compute hinge GAN loss given discriminator logits and target flag.
+
+    args:
+    - output: discriminator predictions [torch.Tensor]
+    - is_real: whether samples are real [bool]
+
+    return:
+    - loss: scalar loss value [torch.Tensor]
+    '''
+    if is_real:
+        return torch.relu(1.0 - output).mean()
+    return torch.relu(1.0 + output).mean()
+
+
+def wasserstein_loss(output: torch.Tensor, is_real: bool) -> torch.Tensor:
+    '''
+    Compute Wasserstein loss treating logits as critic scores.
+
+    args:
+    - output: discriminator predictions [torch.Tensor]
+    - is_real: whether samples are real [bool]
+
+    return:
+    - loss: scalar loss value [torch.Tensor]
+    '''
+    return -output.mean() if is_real else output.mean()
+
+
+def _resolve_is_real(target: torch.Tensor) -> bool:
+    '''
+    Infer real/fake flag by inspecting averaged target tensor.
+
+    args:
+    - target: tensor of labels [torch.Tensor]
+
+    return:
+    - is_real: True if targets indicate real samples [bool]
+    '''
+    return target.float().mean().item() > 0.5
+
+
+adversarial_loss_map: Dict[str, Callable[[torch.Tensor, torch.Tensor], torch.Tensor]] = {
+    "bce": adversarial_loss,
+    "binary_cross_entropy": adversarial_loss,
+    "bcewithlogits": adversarial_loss,
+    "lsgan": least_squares_gan_loss,
+    "least_squares": least_squares_gan_loss,
+    "hinge": lambda output, target: hinge_loss(output, _resolve_is_real(target)),
+    "wasserstein": lambda output, target: wasserstein_loss(output, _resolve_is_real(target)),
+}
+
+
+def get_adversarial_loss(name: str) -> Callable[[torch.Tensor, torch.Tensor], torch.Tensor]:
+    '''
+    Retrieve adversarial loss callable by string key.
+
+    args:
+    - name: loss identifier [str]
+
+    return:
+    - loss_fn: mapped loss function [Callable]
+    '''
     key = (name or "bce").lower()
-    if key in {"bce", "binary_cross_entropy", "bcewithlogits"}:
-        return nn.BCELoss()
-    if key in {"l2", "mse", "lsgan"}:
-        return nn.MSELoss()
-    raise ValueError(f"Unsupported adversarial loss: {name}")
+    if key not in adversarial_loss_map:
+        raise ValueError(f"Unknown adversarial loss: {name}")
+    return adversarial_loss_map[key]
 
 
 def get_criterion(name: str) -> nn.Module:
-    key = (name or "l1").lower()
-    if key in {"l1", "mae"}:
-        return nn.L1Loss()
-    if key in {"l2", "mse"}:
-        return nn.MSELoss()
-    if key in {"smooth_l1", "huber"}:
-        return nn.SmoothL1Loss()
-    raise ValueError(f"Unsupported reconstruction loss: {name}")
+    '''
+    Return reconstruction loss module with no internal reduction.
+
+    args:
+    - name: criterion identifier [str]
+
+    return:
+    - loss_fn: torch loss module [nn.Module]
+    '''
+    name = (name or "l1").lower()
+    if name in {"bce", "bcelogits", "binary_cross_entropy"}:
+        return nn.BCEWithLogitsLoss(reduction="none")
+    if name in {"mse", "mse_loss", "l2"}:
+        return nn.MSELoss(reduction="none")
+    if name in {"l1", "mae"}:
+        return nn.L1Loss(reduction="none")
+    if name in {"smooth_l1", "huber"}:
+        return nn.SmoothL1Loss(reduction="none")
+    if name in {"cosine", "cosine_embedding"}:
+        return nn.CosineEmbeddingLoss(reduction="none")
+    raise ValueError(f"Unsupported criterion: {name}")
+
+
+def get_optimizer(
+    name: Optional[str],
+    params: Iterable[torch.nn.Parameter],
+    lr: float,
+    betas: Optional[Tuple[float, float]] = None,
+) -> torch.optim.Optimizer:
+    '''
+    Construct optimizer for provided parameters according to key.
+
+    args:
+    - name: optimizer identifier [str | None]
+    - params: iterable of parameters to update [Iterable]
+    - lr: learning rate [float]
+    - betas: optional beta/momentum tuple [Tuple | None]
+
+    return:
+    - optimizer: initialized optimizer instance [torch.optim.Optimizer]
+    '''
+    key = (name or "adam").lower()
+    if key == "adam":
+        beta1, beta2 = betas if betas is not None else (0.9, 0.999)
+        return torch.optim.Adam(params, lr=lr, betas=(beta1, beta2))
+    if key == "adamw":
+        beta1, beta2 = betas if betas is not None else (0.9, 0.999)
+        return torch.optim.AdamW(params, lr=lr, betas=(beta1, beta2))
+    if key in {"rmsprop", "rms"}:
+        alpha = betas[0] if betas is not None else 0.99
+        return torch.optim.RMSprop(params, lr=lr, alpha=alpha)
+    if key == "sgd":
+        momentum = betas[0] if betas is not None else 0.0
+        return torch.optim.SGD(params, lr=lr, momentum=momentum)
+    if key == "radam":
+        beta1, beta2 = betas if betas is not None else (0.9, 0.999)
+        return torch.optim.RAdam(params, lr=lr, betas=(beta1, beta2))
+    raise ValueError(f"Unsupported optimizer: {name}")
 
 
 def resolve_device(preferred: Optional[str] = None) -> torch.device:
+    '''
+    Choose execution device, testing CUDA availability if requested.
+
+    args:
+    - preferred: optional device string [str | None]
+
+    return:
+    - device: resolved torch device [torch.device]
+    '''
     """Return a safe torch.device, falling back to CPU when CUDA is unsuitable."""
     def _cuda_supported(dev: torch.device) -> bool:
         try:
@@ -112,9 +308,20 @@ def resolve_device(preferred: Optional[str] = None) -> torch.device:
             return device
     return torch.device("cpu")
 
-
 class LSTMGenerator(nn.Module):
-    """LSTM-based generator with mask-aware conditioning."""
+    '''
+    LSTM-based generator that maps sequences to treatment features.
+
+    args:
+    - input_dim: dimension of main sequence [int]
+    - cond_input_dim: conditioning vector dimension [int]
+    - hidden_dim: LSTM hidden size [int]
+    - output_dim: generated feature dimension [int]
+    - num_layers: number of LSTM layers [int]
+
+    return:
+    - LSTMGenerator: initialized generator module [LSTMGenerator]
+    '''
 
     def __init__(self, input_dim: int, cond_input_dim: int, hidden_dim: int, output_dim: int, num_layers: int):
         super().__init__()
@@ -156,7 +363,18 @@ class LSTMGenerator(nn.Module):
 
 
 class LSTMDiscriminator(nn.Module):
-    """Mask-aware LSTM discriminator returning per-sequence scores."""
+    '''
+    Mask-aware LSTM discriminator that scores complete sequences.
+
+    args:
+    - input_dim: dimensionality of concatenated main sequence [int]
+    - cond_dim: dimension of conditioning features [int]
+    - hidden_dim: LSTM hidden size [int]
+    - num_layers: number of LSTM layers [int]
+
+    return:
+    - LSTMDiscriminator: initialized discriminator module [LSTMDiscriminator]
+    '''
 
     def __init__(self, input_dim: int, cond_dim: int, hidden_dim: int, num_layers: int):
         super().__init__()
@@ -167,7 +385,7 @@ class LSTMDiscriminator(nn.Module):
             num_layers=num_layers,
             batch_first=True,
         )
-        self.classifier = nn.Sequential(nn.Linear(hidden_dim, 1), nn.Sigmoid())
+        self.classifier = nn.Linear(hidden_dim, 1)
 
     def forward(
         self,
@@ -195,6 +413,18 @@ class LSTMDiscriminator(nn.Module):
 
 
 class SyntheticSequenceDataset(Dataset):
+    '''
+    Dataset wrapping synthetic patient timelines with masking metadata.
+
+    args:
+    - data: synthetic dataset dictionary [Dict]
+    - seq_len: desired sequence length [int]
+    - spec_clinical: clinical feature spec [Dict | None]
+    - spec_treatment: treatment feature spec [Dict | None]
+
+    return:
+    - SyntheticSequenceDataset: prepared dataset instance [SyntheticSequenceDataset]
+    '''
     def __init__(
         self,
         data: Dict[str, Any],
@@ -223,6 +453,15 @@ class SyntheticSequenceDataset(Dataset):
 
     @staticmethod
     def _stringify(value: Any) -> str:
+        '''
+        Convert arbitrary values to comparable string representations.
+
+        args:
+        - value: input object to stringify [Any]
+
+        return:
+        - text: normalized string representation [str]
+        '''
         if isinstance(value, (dict, list, tuple, set)):
             try:
                 return json.dumps(value, sort_keys=True)
@@ -233,6 +472,15 @@ class SyntheticSequenceDataset(Dataset):
         return str(value)
 
     def _collect_values(self, key: str) -> Dict[str, set[Any]]:
+        '''
+        Gather observed values per column across all patients.
+
+        args:
+        - key: section of the patient record (clinical/treatment) [str]
+
+        return:
+        - value_map: mapping of column -> observed values [Dict]
+        '''
         raw_values: Dict[str, set[Any]] = {}
         for patient in self.patients:
             records = patient.get(key, [])
@@ -246,6 +494,19 @@ class SyntheticSequenceDataset(Dataset):
     def _configure_columns(
         self, key: str, spec: Dict[str, Any]
     ) -> Tuple[List[str], set[str], Dict[str, List[str]], Dict[str, Dict[str, float]]]:
+        '''
+        Build ordered column lists and categorical metadata.
+
+        args:
+        - key: data section name [str]
+        - spec: user-provided feature specification [Dict]
+
+        return:
+        - columns: ordered list of columns [List]
+        - categorical: categorical feature names [set]
+        - categories: mapping to category lists [Dict]
+        - ordinal_maps: ordinal encoding maps [Dict]
+        '''
         raw_values = self._collect_values(key)
         ordinal_maps: Dict[str, Dict[str, float]] = {}
 
@@ -284,6 +545,15 @@ class SyntheticSequenceDataset(Dataset):
         return columns, categorical, categories, ordinal_maps
 
     def _infer_condition_columns(self) -> List[str]:
+        '''
+        Determine conditioning feature order for actual treatment.
+
+        args:
+        - None: operates on dataset state [None]
+
+        return:
+        - columns: sorted conditioning column names [List]
+        '''
         columns: set[str] = set()
         for patient in self.patients:
             records = patient.get("actual_treatment", [])
@@ -296,7 +566,18 @@ class SyntheticSequenceDataset(Dataset):
         return ordered
 
     @staticmethod
+    @staticmethod
     def _pad(array: np.ndarray, seq_len: int) -> np.ndarray:
+        '''
+        Trim or zero-pad arrays to the configured sequence length.
+
+        args:
+        - array: time-major feature matrix [np.ndarray]
+        - seq_len: target sequence length [int]
+
+        return:
+        - padded: length-adjusted array [np.ndarray]
+        '''
         if array.shape[0] >= seq_len:
             return array[:seq_len]
         pad = np.zeros((seq_len - array.shape[0], array.shape[1]), dtype=array.dtype)
@@ -310,6 +591,20 @@ class SyntheticSequenceDataset(Dataset):
         categories: Dict[str, List[str]],
         ordinal_maps: Dict[str, Dict[str, float]],
     ) -> Tuple[np.ndarray, np.ndarray]:
+        '''
+        Encode patient records into numeric arrays with masks.
+
+        args:
+        - records: list of timestep dictionaries [Iterable]
+        - columns: desired column order [List]
+        - categorical: categorical feature names [set]
+        - categories: known category values [Dict]
+        - ordinal_maps: ordinal mapping dictionaries [Dict]
+
+        return:
+        - values: encoded feature matrix [np.ndarray]
+        - mask: presence mask matrix [np.ndarray]
+        '''
         df = pd.DataFrame(records)
         df = df.drop(columns=["_id", "timestep"], errors="ignore")
         df = df.reindex(columns=columns)
@@ -342,6 +637,16 @@ class SyntheticSequenceDataset(Dataset):
         return values, mask
 
     def _encode_actual(self, records: Iterable[Dict[str, Any]]) -> Tuple[np.ndarray, np.ndarray]:
+        '''
+        Encode actual treatment records with simple imputation.
+
+        args:
+        - records: iterable of treatment entries [Iterable]
+
+        return:
+        - values: encoded conditioning matrix [np.ndarray]
+        - mask: presence mask matrix [np.ndarray]
+        '''
         df = pd.DataFrame(records)
         df = df.drop(columns=["_id", "timestep"], errors="ignore")
         df = df.reindex(columns=self.cond_columns)
@@ -353,9 +658,27 @@ class SyntheticSequenceDataset(Dataset):
         return arr, mask
 
     def __len__(self) -> int:
+        '''
+        Report number of patients available in dataset.
+
+        args:
+        - None: required by Dataset interface [None]
+
+        return:
+        - count: dataset length [int]
+        '''
         return len(self.patients)
 
     def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
+        '''
+        Fetch padded tensors and masks for a specific patient.
+
+        args:
+        - idx: patient index [int]
+
+        return:
+        - sample: dictionary of tensors for model input [Dict]
+        '''
         patient = self.patients[idx]
         clin_vals, clin_mask = self._encode_records(
             patient.get("clinical", []), self.clin_columns, self.clin_categorical, self.clin_categories, self.clin_ord_maps
@@ -386,16 +709,44 @@ class SyntheticSequenceDataset(Dataset):
             "mask_treat": torch.from_numpy(treat_mask),
             "mask_actual": torch.from_numpy(actual_mask),
         }
+def masked_reconstruction_loss(
+    pred: torch.Tensor,
+    target: torch.Tensor,
+    mask: torch.Tensor,
+    loss_fn: nn.Module,
+) -> torch.Tensor:
+    '''
+    Apply a masked reduction around elementwise reconstruction losses.
 
+    args:
+    - pred: model predictions [torch.Tensor]
+    - target: reference values [torch.Tensor]
+    - mask: per-element visibility mask [torch.Tensor]
+    - loss_fn: reduction-free loss module [nn.Module]
 
-def masked_reconstruction_loss(pred: torch.Tensor, target: torch.Tensor, mask: torch.Tensor, loss_type: str) -> torch.Tensor:
-    mask = mask.expand_as(pred)
-    if loss_type == "l1":
-        loss = torch.abs(pred - target) * mask
-    else:
-        loss = ((pred - target) ** 2) * mask
+    return:
+    - loss: scalar masked reconstruction loss [torch.Tensor]
+    '''
+    if isinstance(loss_fn, nn.CosineEmbeddingLoss):
+        mask_steps = (mask.sum(dim=2) > 0).to(pred.dtype)
+        if mask_steps.numel() == 0:
+            return pred.new_tensor(0.0)
+        flat_pred = pred.reshape(-1, pred.size(-1))
+        flat_target = target.reshape(-1, target.size(-1))
+        cos_target = torch.ones(flat_pred.size(0), device=pred.device, dtype=pred.dtype)
+        losses = loss_fn(flat_pred, flat_target, cos_target)
+        losses = losses.view(pred.size(0), pred.size(1))
+        losses = losses * mask_steps
+        denom = mask_steps.sum().clamp_min(1.0)
+        return losses.sum() / denom
+
+    mask = mask.expand_as(pred).to(dtype=pred.dtype)
+    losses = loss_fn(pred, target)
+    if losses.shape != pred.shape:
+        losses = losses.view_as(pred)
+    losses = losses * mask
     denom = mask.sum().clamp_min(1.0)
-    return loss.sum() / denom
+    return losses.sum() / denom
 
 
 def randomize_multiple_one_hot(
@@ -403,6 +754,17 @@ def randomize_multiple_one_hot(
     mask: torch.Tensor,
     extra_ones: int = 1,
 ) -> torch.Tensor:
+    '''
+    Inject random positive entries into masked one-hot tensors.
+
+    args:
+    - cond: conditioning tensor to modify [torch.Tensor]
+    - mask: feature availability mask [torch.Tensor]
+    - extra_ones: number of random insertions [int]
+
+    return:
+    - randomized: perturbed conditioning tensor [torch.Tensor]
+    '''
     if cond.shape != mask.shape:
         raise ValueError("Condition tensor and mask must share the same shape.")
 
@@ -428,6 +790,18 @@ def randomize_multiple_one_hot(
 
 
 def split_dataset(dataset: Dataset, val_fraction: float, seed: int) -> Tuple[Dataset, Dataset]:
+    '''
+    Split dataset into train and validation subsets with a fixed seed.
+
+    args:
+    - dataset: source dataset to partition [Dataset]
+    - val_fraction: fraction assigned to validation [float]
+    - seed: RNG seed for randomness [int]
+
+    return:
+    - train_subset: training dataset subset [Dataset]
+    - val_subset: validation dataset subset [Dataset]
+    '''
     val_size = max(1, int(len(dataset) * val_fraction))
     val_size = min(val_size, len(dataset) - 1)
     train_size = len(dataset) - val_size
@@ -439,6 +813,20 @@ def split_dataset(dataset: Dataset, val_fraction: float, seed: int) -> Tuple[Dat
 def create_dataloaders(
     dataset: SyntheticSequenceDataset, batch_size: int, seed: int
 ) -> Tuple[DataLoader, DataLoader, List[int], List[int]]:
+    '''
+    Create loaders plus index bookkeeping for train/validation splits.
+
+    args:
+    - dataset: dataset instance to load from [SyntheticSequenceDataset]
+    - batch_size: loader batch size [int]
+    - seed: RNG seed for splitting [int]
+
+    return:
+    - train_loader: training DataLoader [DataLoader]
+    - val_loader: validation DataLoader [DataLoader]
+    - train_indices: patient indices for train split [List]
+    - val_indices: patient indices for validation split [List]
+    '''
     train_subset, val_subset = split_dataset(dataset, val_fraction=0.2, seed=seed)
     train_loader = DataLoader(train_subset, batch_size=batch_size, shuffle=True)
     val_loader = DataLoader(val_subset, batch_size=batch_size, shuffle=False)
@@ -459,14 +847,36 @@ def train_epoch(
     Dx: nn.Module,
     Dy: nn.Module,
     loader: DataLoader,
-    optimizer_Gx: torch.optim.Optimizer,
-    optimizer_Gy: torch.optim.Optimizer,
+    optimizer_G: torch.optim.Optimizer,
     optimizer_Dx: torch.optim.Optimizer,
     optimizer_Dy: torch.optim.Optimizer,
-    criterion_adv: nn.Module,
+    criterion_adv: Callable[[torch.Tensor, torch.Tensor], torch.Tensor],
+    criterion_cycle: nn.Module,
+    criterion_id: nn.Module,
     cfg: Config,
     device: torch.device,
 ) -> Dict[str, float]:
+    '''
+    Execute one training epoch over the provided dataloader.
+
+    args:
+    - Gx: clinical-to-treatment generator [nn.Module]
+    - Gy: treatment autoencoder generator [nn.Module]
+    - Dx: discriminator scoring fake treatments [nn.Module]
+    - Dy: discriminator scoring reconstructions [nn.Module]
+    - loader: training dataloader [DataLoader]
+    - optimizer_G: shared generator optimizer [torch.optim.Optimizer]
+    - optimizer_Dx: optimizer for Dx [torch.optim.Optimizer]
+    - optimizer_Dy: optimizer for Dy [torch.optim.Optimizer]
+    - criterion_adv: adversarial loss function [Callable]
+    - criterion_cycle: cycle-consistency loss [nn.Module]
+    - criterion_id: identity loss [nn.Module]
+    - cfg: training configuration [Config]
+    - device: torch device in use [torch.device]
+
+    return:
+    - metrics: dictionary of averaged losses [Dict]
+    '''
     Gx.train()
     Gy.train()
     Dx.train()
@@ -500,18 +910,19 @@ def train_epoch(
         cond_mask = torch.ones_like(tr_actual)
         tr_counter = randomize_multiple_one_hot(tr_actual, mask_actual, extra_ones=1)
 
+        # Update discriminators on detached generator outputs
         optimizer_Dx.zero_grad()
         optimizer_Dy.zero_grad()
 
-        fake_treat_detached, _ = Gx(cl_real, mask_clin, tr_counter, cond_mask, lengths)
-        fake_treat_detached = fake_treat_detached * mask_treat
-        rec_treat_detached, _ = Gy(fake_treat_detached, mask_treat, tr_actual, cond_mask, lengths)
-        rec_treat_detached = rec_treat_detached * mask_treat
+        fake_treat, _ = Gx(cl_real, mask_clin, tr_counter, cond_mask, lengths)
+        fake_treat = fake_treat * mask_treat
+        rec_treat, _ = Gy(fake_treat, mask_treat, tr_actual, cond_mask, lengths)
+        rec_treat = rec_treat * mask_treat
 
         main_real = torch.cat((cl_real, tr_real), dim=2)
         main_mask = torch.cat((mask_clin, mask_treat), dim=2)
-        main_fake_x = torch.cat((cl_real, fake_treat_detached.detach()), dim=2)
-        main_fake_y = torch.cat((cl_real, rec_treat_detached.detach()), dim=2)
+        main_fake_x = torch.cat((cl_real, fake_treat.detach()), dim=2)
+        main_fake_y = torch.cat((cl_real, rec_treat.detach()), dim=2)
 
         pred_real_x = Dx(main_real, main_mask, tr_actual, cond_mask, lengths)
         pred_fake_x = Dx(main_fake_x, main_mask, tr_counter, cond_mask, lengths)
@@ -536,8 +947,8 @@ def train_epoch(
         for p in Dy.parameters():
             p.requires_grad_(False)
 
-        optimizer_Gx.zero_grad()
-        optimizer_Gy.zero_grad()
+        # Update generators with frozen discriminators
+        optimizer_G.zero_grad()
 
         fake_treat, _ = Gx(cl_real, mask_clin, tr_counter, cond_mask, lengths)
         fake_treat = fake_treat * mask_treat
@@ -553,18 +964,17 @@ def train_epoch(
         loss_Gx_adv = criterion_adv(pred_fake_x, ones_seq)
         loss_Gy_adv = criterion_adv(pred_fake_y, ones_seq)
 
-        cycle_loss = masked_reconstruction_loss(rec_treat, tr_real, mask_treat, cfg.criterion)
+        cycle_loss = masked_reconstruction_loss(rec_treat, tr_real, mask_treat, criterion_cycle)
 
         id_treat, _ = Gx(cl_real, mask_clin, tr_counter, cond_mask, lengths)
         id_treat = id_treat * mask_treat
         id_rec, _ = Gy(id_treat, mask_treat, tr_actual, cond_mask, lengths)
         id_rec = id_rec * mask_treat
-        identity_loss = 0.5 * masked_reconstruction_loss(id_rec, tr_real, mask_treat, cfg.criterion)
+        identity_loss = 0.5 * masked_reconstruction_loss(id_rec, tr_real, mask_treat, criterion_id)
 
         g_loss = loss_Gx_adv + loss_Gy_adv + cfg.lambda_cyc * cycle_loss + cfg.lambda_id * identity_loss
         g_loss.backward()
-        optimizer_Gx.step()
-        optimizer_Gy.step()
+        optimizer_G.step()
 
         for p in Dx.parameters():
             p.requires_grad_(True)
@@ -590,10 +1000,30 @@ def evaluate_epoch(
     Dx: nn.Module,
     Dy: nn.Module,
     loader: DataLoader,
-    criterion_adv: nn.Module,
+    criterion_adv: Callable[[torch.Tensor, torch.Tensor], torch.Tensor],
+    criterion_cycle: nn.Module,
+    criterion_id: nn.Module,
     cfg: Config,
     device: torch.device,
 ) -> Dict[str, float]:
+    '''
+    Run evaluation pass without gradient updates for validation data.
+
+    args:
+    - Gx: clinical-to-treatment generator [nn.Module]
+    - Gy: treatment autoencoder generator [nn.Module]
+    - Dx: discriminator scoring fake treatments [nn.Module]
+    - Dy: discriminator scoring reconstructions [nn.Module]
+    - loader: validation dataloader [DataLoader]
+    - criterion_adv: adversarial loss function [Callable]
+    - criterion_cycle: cycle-consistency loss [nn.Module]
+    - criterion_id: identity loss [nn.Module]
+    - cfg: training configuration [Config]
+    - device: torch device in use [torch.device]
+
+    return:
+    - metrics: dictionary of averaged losses [Dict]
+    '''
     Gx.eval()
     Gy.eval()
     Dx.eval()
@@ -648,12 +1078,12 @@ def evaluate_epoch(
 
             loss_Gx_adv = criterion_adv(pred_fake_x, ones_seq)
             loss_Gy_adv = criterion_adv(pred_fake_y, ones_seq)
-            cycle_loss = masked_reconstruction_loss(rec_treat, tr_real, mask_treat, cfg.criterion)
+            cycle_loss = masked_reconstruction_loss(rec_treat, tr_real, mask_treat, criterion_cycle)
             id_treat, _ = Gx(cl_real, mask_clin, tr_counter, cond_mask, lengths)
             id_treat = id_treat * mask_treat
             id_rec, _ = Gy(id_treat, mask_treat, tr_actual, cond_mask, lengths)
             id_rec = id_rec * mask_treat
-            identity_loss = 0.5 * masked_reconstruction_loss(id_rec, tr_real, mask_treat, cfg.criterion)
+            identity_loss = 0.5 * masked_reconstruction_loss(id_rec, tr_real, mask_treat, criterion_id)
 
             loss_Dx = 0.5 * (
                 criterion_adv(pred_real_x, ones_seq) + criterion_adv(pred_fake_x, zeros_seq)
@@ -681,6 +1111,7 @@ __all__ = [
     "set_seed",
     "get_adversarial_loss",
     "get_criterion",
+    "get_optimizer",
     "resolve_device",
     "SyntheticSequenceDataset",
     "create_dataloaders",
@@ -704,6 +1135,21 @@ def train(
     schema_path: Optional[str] = None,
     checkpoint_dir: str | Path = "data/models",
 ) -> Path:
+    '''
+    Top-level training routine handling data, models, and checkpoints.
+
+    args:
+    - cfg: parsed training configuration [Config]
+    - synthetic_data: optional path to pre-generated JSON [str | None]
+    - patients: number of patients to generate when needed [int]
+    - timesteps: timesteps for synthetic generation [int | None]
+    - seed: optional override for dataset RNG [int | None]
+    - schema_path: path to schema YAML [str | None]
+    - checkpoint_dir: directory for saving checkpoints [str | Path]
+
+    return:
+    - ckpt_path: path to written checkpoint file [Path]
+    '''
     run_seed = seed if seed is not None else cfg.seed
     set_seed(run_seed)
     device = resolve_device(cfg.device)
@@ -738,12 +1184,18 @@ def train(
     Dx = LSTMDiscriminator(clin_dim + treat_dim, cond_dim, cfg.d_hidden, cfg.num_layers).to(device)
     Dy = LSTMDiscriminator(clin_dim + treat_dim, cond_dim, cfg.d_hidden, cfg.num_layers).to(device)
 
-    optimizer_Gx = torch.optim.Adam(Gx.parameters(), lr=cfg.lr_g, betas=(cfg.beta1, cfg.beta2))
-    optimizer_Gy = torch.optim.Adam(Gy.parameters(), lr=cfg.lr_g, betas=(cfg.beta1, cfg.beta2))
-    optimizer_Dx = torch.optim.Adam(Dx.parameters(), lr=cfg.lr_d, betas=(cfg.beta1, cfg.beta2))
-    optimizer_Dy = torch.optim.Adam(Dy.parameters(), lr=cfg.lr_d, betas=(cfg.beta1, cfg.beta2))
+    optimizer_G = get_optimizer(
+        cfg.opt_gen,
+        list(Gx.parameters()) + list(Gy.parameters()),
+        cfg.lr_g,
+        (cfg.beta1, cfg.beta2),
+    )
+    optimizer_Dx = get_optimizer(cfg.opt_disc, Dx.parameters(), cfg.lr_d, (cfg.beta1, cfg.beta2))
+    optimizer_Dy = get_optimizer(cfg.opt_disc, Dy.parameters(), cfg.lr_d, (cfg.beta1, cfg.beta2))
 
     criterion_adv = get_adversarial_loss(cfg.adv_loss)
+    criterion_cycle = get_criterion(cfg.criterion)
+    criterion_id = get_criterion(cfg.criterion)
 
     for epoch in range(cfg.epochs):
         train_metrics = train_epoch(
@@ -752,11 +1204,12 @@ def train(
             Dx,
             Dy,
             train_loader,
-            optimizer_Gx,
-            optimizer_Gy,
+            optimizer_G,
             optimizer_Dx,
             optimizer_Dy,
             criterion_adv,
+            criterion_cycle,
+            criterion_id,
             cfg,
             device,
         )
@@ -767,6 +1220,8 @@ def train(
             Dy,
             val_loader,
             criterion_adv,
+            criterion_cycle,
+            criterion_id,
             cfg,
             device,
         )
