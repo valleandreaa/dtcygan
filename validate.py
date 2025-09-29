@@ -7,12 +7,33 @@ import argparse
 import json
 import math
 from collections import defaultdict
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
 import numpy as np
 import torch
+
+from dtcygan.training import (
+    Config,
+    SyntheticSequenceDataset,
+    LSTMGenerator,
+    resolve_device,
+    set_seed,
+)
+from dtcygan.eval_utils import bootstrap_two_sample_ci, wasserstein_1d, ks_two_sample
+from dtcygan.eval_utils import (
+    load_dataset_payload,
+    load_dataset,
+    filter_patients,
+    collect_labels_from_patients,
+    ensure_probability_metadata,
+    load_checkpoint_bundle,
+    build_counterfactual_patients,
+    bootstrap_two_sample_ci,
+    wasserstein_1d,
+    ks_two_sample,
+    final_record,
+)
 
 CONSTRAINT_LIMITS: Dict[str, tuple[float, float]] = {
     "tumour_size_before_treatment_mm": (0.0, 400.0),
@@ -41,15 +62,57 @@ OUTCOME_LABELS = ["DOD", "NED", "AWD"]
 TREATMENT_SCENARIOS = ["S", "S+CT", "S+RT", "S+RT+CT"]
 
 
+SCENARIO_CONDITIONS: Dict[str, Dict[str, int]] = {
+    "S": {
+        "episodes.surgery": 1,
+        "episodes.chemotherapy": 0,
+        "episodes.radiotherapy": 0,
+    },
+    "S+CT": {
+        "episodes.surgery": 1,
+        "episodes.chemotherapy": 1,
+        "episodes.radiotherapy": 0,
+    },
+    "S+RT": {
+        "episodes.surgery": 1,
+        "episodes.chemotherapy": 0,
+        "episodes.radiotherapy": 1,
+    },
+    "S+RT+CT": {
+        "episodes.surgery": 1,
+        "episodes.chemotherapy": 1,
+        "episodes.radiotherapy": 1,
+    },
+}
+
+
+PROBABILITY_ONLY_FEATURES = {
+    "status_at_last_follow_up",
+    "treatment_endpoint_category",
+}
+
+
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Validate synthetic counterfactual trajectories against clinical constraints and empirical data."
     )
-    parser.add_argument("--counterfactual", required=True, help="Synthetic counterfactual dataset (JSON).")
-    parser.add_argument("--reference", required=True, help="Empirical reference dataset (JSON).")
+    parser.add_argument(
+        "--counterfactual",
+        help="Synthetic counterfactual dataset (JSON). When omitted the script generates counterfactuals using the checkpoint.",
+    )
+    parser.add_argument(
+        "--reference",
+        help="Empirical reference dataset (JSON). Required when --counterfactual is provided.",
+    )
+    parser.add_argument(
+        "--dataset",
+        default=str(Path("data") / "syntects.json"),
+        help="Dataset JSON used to rebuild counterfactuals when --counterfactual is absent (default: data/syntects.json).",
+    )
     parser.add_argument(
         "--checkpoint",
-        help="Checkpoint containing validation_patient_ids metadata to restrict analysis to the validation fold.",
+        default=str(Path("data") / "models" / "dtcygan_20250928_135339.pt"),
+        help="Checkpoint containing generator weights and validation metadata (default: data/models/dtcygan_20250928_135339.pt).",
     )
     parser.add_argument("--output", help="Optional path to write a JSON validation report.")
     parser.add_argument(
@@ -63,34 +126,288 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default="patient_reported_outcome_score",
         help="Feature to use when computing scenario risks (default: patient_reported_outcome_score).",
     )
+    parser.add_argument(
+        "--samples",
+        type=int,
+        default=32,
+        help="Stochastic counterfactual samples per patient when generating internally (default: 32).",
+    )
     parser.add_argument("--seed", type=int, help="Optional RNG seed for bootstrapping.")
     return parser
 
 
-def load_dataset(path: str | Path) -> List[Dict[str, Any]]:
+def load_dataset_payload(path: str | Path) -> Dict[str, Any]:
     with open(path, "r", encoding="utf-8") as fh:
         payload = json.load(fh)
+    if not isinstance(payload, dict) or "patients" not in payload:
+        raise ValueError(f"Dataset at {path} must contain a top-level 'patients' key.")
+    return payload
+
+
+def load_dataset(path: str | Path) -> List[Dict[str, Any]]:
+    payload = load_dataset_payload(path)
     patients = payload.get("patients", [])
     if not isinstance(patients, list):
         raise ValueError(f"Dataset at {path} does not contain a 'patients' list.")
     return patients
 
 
-def load_validation_ids(checkpoint_path: Optional[str | Path]) -> Optional[set[str]]:
-    if not checkpoint_path:
-        return None
-    ckpt = torch.load(checkpoint_path, map_location="cpu")
-    metadata = ckpt.get("metadata", {})
-    ids = metadata.get("validation_patient_ids")
-    if not ids:
-        return None
-    return set(ids)
-
-
 def filter_patients(patients: List[Dict[str, Any]], keep_ids: Optional[set[str]]) -> List[Dict[str, Any]]:
     if keep_ids is None:
         return patients
-    return [patient for patient in patients if patient.get("patient_id") in keep_ids]
+    keep_ids = {str(pid) for pid in keep_ids}
+    return [patient for patient in patients if str(patient.get("patient_id")) in keep_ids]
+
+def _format_float(value: float, precision: int = 4) -> str:
+    if value is None or not np.isfinite(value):
+        return "nan"
+    return f"{value:.{precision}f}"
+
+
+def _format_ci(ci: Optional[Tuple[float, float]], precision: int = 4) -> str:
+    if not ci:
+        return "[nan, nan]"
+    low, high = ci
+    if not np.isfinite(low) or not np.isfinite(high):
+        return "[nan, nan]"
+    return f"[{low:.{precision}f}, {high:.{precision}f}]"
+
+
+
+
+def extract_validation_ids(metadata: Dict[str, Any]) -> Optional[set[str]]:
+    ids = metadata.get("validation_patient_ids") if metadata else None
+    if not ids:
+        return None
+    return {str(pid) for pid in ids}
+
+
+def load_checkpoint_bundle(
+    checkpoint_path: str | Path,
+) -> tuple[Config, Dict[str, Any], LSTMGenerator, Optional[set[str]], torch.device]:
+    ckpt = torch.load(checkpoint_path, map_location="cpu")
+    cfg = Config(**ckpt["config"])
+    metadata: Dict[str, Any] = ckpt.get("metadata") or {}
+    validation_ids = extract_validation_ids(metadata)
+
+    clin_dim = metadata.get("clin_dim")
+    treat_dim = metadata.get("treat_dim")
+    cond_dim = metadata.get("cond_dim")
+    if None in {clin_dim, treat_dim, cond_dim}:
+        raise ValueError("Checkpoint metadata must include clin_dim, treat_dim, and cond_dim.")
+
+    device = resolve_device(cfg.device)
+    generator = LSTMGenerator(clin_dim, cond_dim, cfg.g_hidden, treat_dim, cfg.num_layers).to(device)
+    generator.load_state_dict(ckpt["Gx"])
+    generator.eval()
+    return cfg, metadata, generator, validation_ids, device
+
+
+def build_counterfactual_patients(
+    dataset: SyntheticSequenceDataset,
+    generator: LSTMGenerator,
+    device: torch.device,
+    validation_ids: Optional[set[str]],
+    extra_ones: int = 1,
+    *,
+    status_labels: Optional[List[str]] = None,
+    endpoint_labels: Optional[List[str]] = None,
+    samples_per_patient: int = 32,
+) -> List[Dict[str, Any]]:
+    generator.eval()
+
+    categorical_features = dataset.treat_categorical
+    categorical_map = dataset.treat_categories
+    ordinal_lookup = {
+        feature: [(float(value), label) for label, value in mapping.items()]
+        for feature, mapping in dataset.treat_ord_maps.items()
+    }
+
+    status_label_list = (
+        list(status_labels)
+        if status_labels is not None
+        else list(dataset.treat_categories.get("status_at_last_follow_up", OUTCOME_LABELS))
+    )
+    endpoint_label_list = (
+        list(endpoint_labels)
+        if endpoint_labels is not None
+        else list(dataset.treat_categories.get("treatment_endpoint_category", []))
+    )
+
+    def decode_generated(feature: str, raw: float) -> tuple[Any, float]:
+        raw_value = float(raw)
+        if feature in PROBABILITY_ONLY_FEATURES:
+            return raw_value, raw_value
+        if feature in categorical_features:
+            categories = categorical_map.get(feature, [])
+            if categories:
+                code = int(round(raw_value))
+                code = max(0, min(code, len(categories) - 1))
+                return categories[code], raw_value
+            return int(round(raw_value)), raw_value
+        if feature in ordinal_lookup:
+            candidates = ordinal_lookup[feature]
+            if candidates:
+                closest_value, closest_label = min(candidates, key=lambda item: abs(item[0] - raw_value))
+                return closest_label, raw_value
+        return raw_value, raw_value
+
+    def logits_to_probabilities(feature: str, raw_value: float) -> Dict[str, float]:
+        categories = categorical_map.get(feature, [])
+        if not categories:
+            return {}
+        if len(categories) == 1:
+            return {categories[0]: 1.0}
+        if len(categories) == 2:
+            prob_positive = 1.0 / (1.0 + math.exp(-raw_value))
+            return {
+                categories[0]: float(1.0 - prob_positive),
+                categories[1]: float(prob_positive),
+            }
+        positions = np.arange(len(categories), dtype=float)
+        scores = -np.square(raw_value - positions)
+        scores -= scores.max()
+        weights = np.exp(scores)
+        denom = weights.sum()
+        if denom <= 0:
+            return {cat: 0.0 for cat in categories}
+        weights /= denom
+        return {cat: float(w) for cat, w in zip(categories, weights)}
+
+    results: List[Dict[str, Any]] = []
+
+    for idx, patient in enumerate(dataset.patients):
+        patient_id = str(patient.get("patient_id", f"P{idx:05d}"))
+        if validation_ids is not None and patient_id not in validation_ids:
+            continue
+
+        sample = dataset[idx]
+        x_clin = sample["x_clin"].unsqueeze(0).to(device)
+        mask_clin = sample["mask_clin"].unsqueeze(0).to(device)
+        tr_actual = sample["actual_treatment"].unsqueeze(0).to(device)
+        mask_actual = sample["mask_actual"].unsqueeze(0).to(device)
+        mask_treat = sample["mask_treat"].unsqueeze(0).to(device)
+
+        step_mask = ((mask_clin.sum(dim=2, keepdim=True) + mask_treat.sum(dim=2, keepdim=True)) > 0).float()
+        lengths = step_mask.squeeze(-1).sum(dim=1).clamp(min=1).long()
+
+        x_clin = x_clin * mask_clin
+        mask_clin = mask_clin * step_mask
+        mask_treat = mask_treat * step_mask
+        tr_actual = tr_actual * mask_actual
+
+        actual_np = tr_actual.squeeze(0).cpu().numpy() if tr_actual.numel() else np.zeros((0, 0))
+        actual_mask_np = mask_actual.squeeze(0).cpu().numpy() if mask_actual.numel() else np.zeros((0, 0))
+
+        base_cond_map: Dict[str, float] = {feature: 0.0 for feature in dataset.cond_columns}
+        if actual_np.size and actual_mask_np.size:
+            valid_rows = actual_mask_np.sum(axis=1) > 0
+            if valid_rows.any():
+                base_idx = int(np.argmax(valid_rows))
+                row_vals = actual_np[base_idx]
+                row_mask = actual_mask_np[base_idx]
+                for feat_idx, feature in enumerate(dataset.cond_columns):
+                    if feat_idx < row_vals.shape[0] and row_mask[feat_idx] > 0:
+                        base_cond_map[feature] = float(row_vals[feat_idx])
+
+        observed_flag_map = {
+            "actual_surgery": base_cond_map.get("episodes.surgery", 0.0),
+            "actual_chemotherapy": base_cond_map.get("episodes.chemotherapy", 0.0),
+            "actual_radiotherapy": base_cond_map.get("episodes.radiotherapy", 0.0),
+        }
+
+        seq_len = x_clin.size(1)
+        step_mask_np = step_mask.squeeze(0).squeeze(-1).cpu().numpy().astype(bool)
+
+        for scenario_name, overrides in SCENARIO_CONDITIONS.items():
+            scenario_cond_map = base_cond_map.copy()
+            scenario_cond_map.update({k: float(v) for k, v in overrides.items() if k in scenario_cond_map})
+
+            cond_vector = torch.tensor(
+                [float(scenario_cond_map.get(feature, 0.0)) for feature in dataset.cond_columns],
+                dtype=torch.float32,
+                device=device,
+            )
+            cond_tensor = cond_vector.view(1, 1, -1).repeat(1, seq_len, 1)
+            cond_tensor = cond_tensor * step_mask
+            cond_mask = torch.ones_like(cond_tensor) * step_mask
+
+            with torch.no_grad():
+                fake_treat, _ = generator(x_clin, mask_clin, cond_tensor, cond_mask, lengths)
+                fake_treat = fake_treat * mask_treat
+
+            fake_np = fake_treat.squeeze(0).cpu().numpy()
+            mask_np = mask_treat.squeeze(0).cpu().numpy()
+
+            treatment_records: List[Dict[str, Any]] = []
+            scenario_logits: Dict[str, float] = {}
+            for step_idx, step_valid in enumerate(step_mask_np):
+                if not bool(step_valid):
+                    continue
+                step_record: Dict[str, Any] = {}
+                for feat_idx, feature in enumerate(dataset.treat_columns):
+                    if mask_np[step_idx, feat_idx] <= 0:
+                        continue
+                    decoded_value, raw_value = decode_generated(feature, fake_np[step_idx, feat_idx])
+                    if feature in PROBABILITY_ONLY_FEATURES:
+                        scenario_logits[feature] = raw_value
+                        step_record[f"{feature}_logit"] = raw_value
+                        continue
+                    step_record[feature] = decoded_value
+                step_record.update(observed_flag_map)
+                step_record.update(
+                    {
+                        "scenario_surgery": scenario_cond_map.get("episodes.surgery", 0.0),
+                        "scenario_chemotherapy": scenario_cond_map.get("episodes.chemotherapy", 0.0),
+                        "scenario_radiotherapy": scenario_cond_map.get("episodes.radiotherapy", 0.0),
+                        "treatment_scenario": scenario_name,
+                    }
+                )
+                step_record["_id"] = patient_id
+                step_record["timestep"] = step_idx
+                treatment_records.append(step_record)
+
+            actual_records: List[Dict[str, Any]] = []
+            for step_idx, step_valid in enumerate(step_mask_np):
+                if not bool(step_valid):
+                    continue
+                cond_record = {
+                    feature: float(scenario_cond_map.get(feature, 0.0))
+                    for feature in dataset.cond_columns
+                }
+                cond_record["treatment_scenario"] = scenario_name
+                cond_record["_id"] = patient_id
+                cond_record["timestep"] = step_idx
+                actual_records.append(cond_record)
+
+            status_probs: Dict[str, float] = {label: 0.0 for label in status_label_list}
+            status_logit = scenario_logits.get("status_at_last_follow_up")
+            if status_logit is not None:
+                derived = logits_to_probabilities("status_at_last_follow_up", status_logit)
+                for label, prob in derived.items():
+                    status_probs[label] = prob
+
+            endpoint_probs: Dict[str, float] = {label: 0.0 for label in endpoint_label_list}
+            endpoint_logit = scenario_logits.get("treatment_endpoint_category")
+            if endpoint_logit is not None:
+                derived = logits_to_probabilities("treatment_endpoint_category", endpoint_logit)
+                for label, prob in derived.items():
+                    endpoint_probs[label] = prob
+
+            results.append(
+                {
+                    "patient_id": patient_id,
+                    "scenario": scenario_name,
+                    "clinical": patient.get("clinical", []),
+                    "treatment": treatment_records,
+                    "actual_treatment": actual_records,
+                    "status_probabilities": status_probs,
+                    "endpoint_probabilities": endpoint_probs,
+                    "samples_per_patient": 1,
+                }
+            )
+
+    return results
 
 
 def to_float(value: Any) -> Optional[float]:
@@ -176,7 +493,7 @@ def iter_feature_values(patients: List[Dict[str, Any]], feature: str, section: s
     return values
 
 
-def wasserstein_distance(arr1: np.ndarray, arr2: np.ndarray, bins: int = 512) -> float:
+def _wasserstein_distance_numpy(arr1: np.ndarray, arr2: np.ndarray, bins: int = 512) -> float:
     if arr1.size == 0 or arr2.size == 0:
         return float("nan")
     min_v = min(arr1.min(), arr2.min())
@@ -189,7 +506,7 @@ def wasserstein_distance(arr1: np.ndarray, arr2: np.ndarray, bins: int = 512) ->
     return float(np.trapz(np.abs(cdf1 - cdf2), grid))
 
 
-def ks_2sample(arr1: np.ndarray, arr2: np.ndarray) -> tuple[float, float]:
+def _ks_2sample_numpy(arr1: np.ndarray, arr2: np.ndarray) -> tuple[float, float]:
     if arr1.size == 0 or arr2.size == 0:
         return float("nan"), float("nan")
     data_all = np.concatenate([arr1, arr2])
@@ -203,42 +520,84 @@ def ks_2sample(arr1: np.ndarray, arr2: np.ndarray) -> tuple[float, float]:
     return d_stat, p_val
 
 
+
+
 def compute_distribution_metrics(
     synthetic_patients: List[Dict[str, Any]],
     reference_patients: List[Dict[str, Any]],
+    n_boot: int,
+    seed: Optional[int],
 ) -> Dict[str, Dict[str, float]]:
     metrics: Dict[str, Dict[str, float]] = {}
-    for feature in DISTRIBUTION_FEATURES:
+    for idx, feature in enumerate(DISTRIBUTION_FEATURES):
         syn_array = extract_feature(iter_feature_values(synthetic_patients, feature))
         ref_array = extract_feature(iter_feature_values(reference_patients, feature))
         if syn_array.size == 0 or ref_array.size == 0:
-            metrics[feature] = {"w1": float("nan"), "ks_stat": float("nan"), "ks_pvalue": float("nan")}
+            metrics[feature] = {
+                "w1": float("nan"),
+                "w1_ci": (float("nan"), float("nan")),
+                "ks_stat": float("nan"),
+                "ks_ci": (float("nan"), float("nan")),
+                "ks_pvalue": float("nan"),
+            }
             continue
-        w1 = wasserstein_distance(syn_array, ref_array)
-        ks_stat, ks_pvalue = ks_2sample(syn_array, ref_array)
-        metrics[feature] = {"w1": w1, "ks_stat": ks_stat, "ks_pvalue": ks_pvalue}
+
+        w1 = wasserstein_1d(syn_array, ref_array)
+        w1_ci = bootstrap_two_sample_ci(
+            syn_array,
+            ref_array,
+            n_boot,
+            None if seed is None else seed + idx * 4,
+            lambda a, b: wasserstein_1d(a, b),
+        )
+
+        ks_stat, ks_pvalue = ks_two_sample(syn_array, ref_array)
+        ks_ci = bootstrap_two_sample_ci(
+            syn_array,
+            ref_array,
+            n_boot,
+            None if seed is None else seed + idx * 4 + 1,
+            lambda a, b: ks_two_sample(a, b)[0],
+        )
+
+        metrics[feature] = {
+            "w1": w1,
+            "w1_ci": w1_ci,
+            "ks_stat": ks_stat,
+            "ks_ci": ks_ci,
+            "ks_pvalue": ks_pvalue,
+        }
     return metrics
 
 
 def gather_scenario_samples(
     patients: List[Dict[str, Any]],
+    labels: List[str],
+    probability_key: str,
+    field_name: str,
 ) -> Dict[str, Dict[str, np.ndarray]]:
     scenario_outcomes: Dict[str, Dict[str, List[float]]] = {
-        scen: {out: [] for out in OUTCOME_LABELS} for scen in TREATMENT_SCENARIOS
+        scen: {label: [] for label in labels} for scen in TREATMENT_SCENARIOS
     }
     for patient in patients:
         actual_final = final_record(patient.get("actual_treatment", []))
         scenario = scenario_label(actual_final)
         if scenario not in scenario_outcomes:
             continue
-        last_treatment = final_record(patient.get("treatment", []))
-        status = last_treatment.get("status_at_last_follow_up")
-        if status not in OUTCOME_LABELS:
+
+        probs = patient.get(probability_key)
+        if isinstance(probs, dict) and probs:
+            for label in labels:
+                scenario_outcomes[scenario][label].append(float(probs.get(label, 0.0)))
             continue
-        for outcome in OUTCOME_LABELS:
-            scenario_outcomes[scenario][outcome].append(1.0 if status == outcome else 0.0)
+
+        last_treatment = final_record(patient.get("treatment", []))
+        observed_label = last_treatment.get(field_name)
+        for label in labels:
+            scenario_outcomes[scenario][label].append(1.0 if observed_label == label else 0.0)
+
     return {
-        scen: {out: extract_feature(vals) for out, vals in outcomes.items()}
+        scen: {label: extract_feature(vals) for label, vals in outcomes.items()}
         for scen, outcomes in scenario_outcomes.items()
     }
 
@@ -246,21 +605,67 @@ def gather_scenario_samples(
 def compute_scenario_metrics(
     synthetic_patients: List[Dict[str, Any]],
     reference_patients: List[Dict[str, Any]],
-) -> Dict[str, Dict[str, Dict[str, float]]]:
-    syn_samples = gather_scenario_samples(synthetic_patients)
-    ref_samples = gather_scenario_samples(reference_patients)
-    results: Dict[str, Dict[str, Dict[str, float]]] = {}
-    for scenario in TREATMENT_SCENARIOS:
-        scenario_metrics: Dict[str, Dict[str, float]] = {}
-        for outcome in OUTCOME_LABELS:
-            syn_arr = syn_samples.get(scenario, {}).get(outcome, np.array([]))
-            ref_arr = ref_samples.get(scenario, {}).get(outcome, np.array([]))
+    labels: List[str],
+    probability_key: str,
+    field_name: str,
+    n_boot: int,
+    seed: Optional[int],
+) -> Dict[str, Dict[str, Dict[str, Any]]]:
+    syn_samples = gather_scenario_samples(synthetic_patients, labels, probability_key, field_name)
+    ref_samples = gather_scenario_samples(reference_patients, labels, probability_key, field_name)
+    results: Dict[str, Dict[str, Dict[str, Any]]] = {}
+    for scen_idx, scenario in enumerate(TREATMENT_SCENARIOS):
+        scenario_metrics: Dict[str, Dict[str, Any]] = {}
+        for out_idx, label in enumerate(labels):
+            syn_arr = syn_samples.get(scenario, {}).get(label, np.array([]))
+            ref_arr = ref_samples.get(scenario, {}).get(label, np.array([]))
+            entry: Dict[str, Any] = {
+                "sample_sizes": {
+                    "synthetic": int(syn_arr.size),
+                    "reference": int(ref_arr.size),
+                }
+            }
             if syn_arr.size == 0 or ref_arr.size == 0:
-                scenario_metrics[outcome] = {"w1": float("nan"), "ks_stat": float("nan"), "ks_pvalue": float("nan")}
+                entry.update(
+                    {
+                        "delta_mean": float("nan"),
+                        "delta_ci": (float("nan"), float("nan")),
+                        "ks_stat": float("nan"),
+                        "ks_ci": (float("nan"), float("nan")),
+                        "ks_pvalue": float("nan"),
+                    }
+                )
+                scenario_metrics[label] = entry
                 continue
-            w1 = abs(syn_arr.mean() - ref_arr.mean())
-            ks_stat, ks_pvalue = ks_2sample(syn_arr, ref_arr)
-            scenario_metrics[outcome] = {"w1": w1, "ks_stat": ks_stat, "ks_pvalue": ks_pvalue}
+
+            delta = float(abs(syn_arr.mean() - ref_arr.mean()))
+            delta_ci = bootstrap_two_sample_ci(
+                syn_arr,
+                ref_arr,
+                n_boot,
+                None if seed is None else seed + scen_idx * 64 + out_idx * 4,
+                lambda a, b: float(abs(a.mean() - b.mean())),
+            )
+
+            ks_stat, ks_pvalue = ks_two_sample(syn_arr, ref_arr)
+            ks_ci = bootstrap_two_sample_ci(
+                syn_arr,
+                ref_arr,
+                n_boot,
+                None if seed is None else seed + scen_idx * 64 + out_idx * 4 + 1,
+                lambda a, b: ks_two_sample(a, b)[0],
+            )
+
+            entry.update(
+                {
+                    "delta_mean": delta,
+                    "delta_ci": delta_ci,
+                    "ks_stat": ks_stat,
+                    "ks_ci": ks_ci,
+                    "ks_pvalue": ks_pvalue,
+                }
+            )
+            scenario_metrics[label] = entry
         results[scenario] = scenario_metrics
     return results
 
@@ -367,18 +772,83 @@ def generate_report(summary: Dict[str, Any]) -> str:
     lines.append("")
     lines.append("Distributional alignment (W1 distance, KS statistic, KS p-value):")
     for feature, stats in summary["distribution_metrics"].items():
+        p_val = stats.get("ks_pvalue")
+        p_str = f"{p_val:.3e}" if p_val is not None and np.isfinite(p_val) else "nan"
         lines.append(
-            f"  {feature}: W1={stats['w1']:.4f}, KS={stats['ks_stat']:.4f}, p={stats['ks_pvalue']:.3e}"
+            "  {feature}: W1={w1} CI={w1_ci}, KS={ks} CI={ks_ci}, p={p}".format(
+                feature=feature,
+                w1=_format_float(stats.get("w1")),
+                w1_ci=_format_ci(stats.get("w1_ci")),
+                ks=_format_float(stats.get("ks_stat")),
+                ks_ci=_format_ci(stats.get("ks_ci")),
+                p=p_str,
+            )
         )
 
+    scenario_section = summary.get("scenario_metrics", {})
+    status_labels = summary.get("status_labels", OUTCOME_LABELS)
+    status_metrics = scenario_section.get("status", {})
+
     lines.append("")
-    lines.append("Scenario-outcome comparison (|Δmean| ~ W1 surrogate, KS):")
-    for scenario, outcomes in summary["scenario_metrics"].items():
+    lines.append("Scenario status probability comparison (|Δmean|, KS):")
+    for scenario in TREATMENT_SCENARIOS:
         lines.append(f"  {scenario}:")
-        for outcome, stats in outcomes.items():
-            lines.append(
-                f"    {outcome}: |Δ|={stats['w1']:.4f}, KS={stats['ks_stat']:.4f}, p={stats['ks_pvalue']:.3e}"
+        metrics = status_metrics.get(scenario, {})
+        for label in status_labels:
+            stats = metrics.get(label, {})
+            p_val = stats.get("ks_pvalue")
+            p_str = f"{p_val:.3e}" if p_val is not None and np.isfinite(p_val) else "nan"
+            sizes = stats.get("sample_sizes", {})
+            n_syn = sizes.get("synthetic")
+            n_ref = sizes.get("reference")
+            size_str = (
+                f" N_syn={n_syn} N_ref={n_ref}"
+                if n_syn is not None and n_ref is not None
+                else ""
             )
+            lines.append(
+                "    {label}: |Δ|={delta} CI={delta_ci}, KS={ks} CI={ks_ci}, p={p}{sizes}".format(
+                    label=label,
+                    delta=_format_float(stats.get("delta_mean")),
+                    delta_ci=_format_ci(stats.get("delta_ci")),
+                    ks=_format_float(stats.get("ks_stat")),
+                    ks_ci=_format_ci(stats.get("ks_ci")),
+                    p=p_str,
+                    sizes=size_str,
+                )
+            )
+
+    endpoint_labels = summary.get("endpoint_labels", [])
+    endpoint_metrics = scenario_section.get("endpoint", {}) if endpoint_labels else {}
+    if endpoint_labels and endpoint_metrics:
+        lines.append("")
+        lines.append("Scenario treatment endpoint probability comparison (|Δmean|, KS):")
+        for scenario in TREATMENT_SCENARIOS:
+            lines.append(f"  {scenario}:")
+            metrics = endpoint_metrics.get(scenario, {})
+            for label in endpoint_labels:
+                stats = metrics.get(label, {})
+                p_val = stats.get("ks_pvalue")
+                p_str = f"{p_val:.3e}" if p_val is not None and np.isfinite(p_val) else "nan"
+                sizes = stats.get("sample_sizes", {})
+                n_syn = sizes.get("synthetic")
+                n_ref = sizes.get("reference")
+                size_str = (
+                    f" N_syn={n_syn} N_ref={n_ref}"
+                    if n_syn is not None and n_ref is not None
+                    else ""
+                )
+                lines.append(
+                    "    {label}: |Δ|={delta} CI={delta_ci}, KS={ks} CI={ks_ci}, p={p}{sizes}".format(
+                        label=label,
+                        delta=_format_float(stats.get("delta_mean")),
+                        delta_ci=_format_ci(stats.get("delta_ci")),
+                        ks=_format_float(stats.get("ks_stat")),
+                        ks_ci=_format_ci(stats.get("ks_ci")),
+                        p=p_str,
+                        sizes=size_str,
+                    )
+                )
 
     lines.append("")
     lines.append(
@@ -402,12 +872,54 @@ def generate_report(summary: Dict[str, Any]) -> str:
 def main(argv: Optional[List[str]] = None) -> None:
     args = build_arg_parser().parse_args(argv)
 
-    cf_patients = load_dataset(args.counterfactual)
-    ref_patients = load_dataset(args.reference)
+    if bool(args.counterfactual) ^ bool(args.reference):
+        raise ValueError("Both --counterfactual and --reference must be provided together.")
 
-    validation_ids = load_validation_ids(args.checkpoint)
-    cf_patients = filter_patients(cf_patients, validation_ids)
-    ref_patients = filter_patients(ref_patients, validation_ids)
+    cfg, metadata, generator, validation_ids, device = load_checkpoint_bundle(args.checkpoint)
+    seed_value = args.seed if args.seed is not None else cfg.seed
+    if seed_value is not None:
+        set_seed(seed_value)
+
+    dataset_status_labels: List[str] = []
+    dataset_endpoint_labels: List[str] = []
+
+    if args.counterfactual:
+        cf_patients = filter_patients(load_dataset(args.counterfactual), validation_ids)
+        ref_patients = filter_patients(load_dataset(args.reference), validation_ids)
+    else:
+        dataset_payload = load_dataset_payload(args.dataset)
+        dataset = SyntheticSequenceDataset(
+            dataset_payload,
+            cfg.seq_len,
+            spec_clinical=metadata.get("clinical_feature_spec"),
+            spec_treatment=metadata.get("treatment_feature_spec"),
+        )
+        dataset_status_labels = list(dataset.treat_categories.get("status_at_last_follow_up", OUTCOME_LABELS))
+        dataset_endpoint_labels = list(dataset.treat_categories.get("treatment_endpoint_category", []))
+        cf_patients = build_counterfactual_patients(
+            dataset,
+            generator,
+            device,
+            validation_ids,
+            status_labels=dataset_status_labels,
+            endpoint_labels=dataset_endpoint_labels,
+            samples_per_patient=max(1, args.samples),
+        )
+        ref_patients = filter_patients(dataset_payload["patients"], validation_ids)
+
+    status_labels = sorted(
+        set(dataset_status_labels or OUTCOME_LABELS)
+        | set(collect_labels_from_patients(cf_patients, "status_at_last_follow_up", "status_probabilities"))
+        | set(collect_labels_from_patients(ref_patients, "status_at_last_follow_up", "status_probabilities"))
+    )
+    endpoint_labels = sorted(
+        set(dataset_endpoint_labels)
+        | set(collect_labels_from_patients(cf_patients, "treatment_endpoint_category", "endpoint_probabilities"))
+        | set(collect_labels_from_patients(ref_patients, "treatment_endpoint_category", "endpoint_probabilities"))
+    )
+
+    ensure_probability_metadata(cf_patients, status_labels, endpoint_labels)
+    ensure_probability_metadata(ref_patients, status_labels, endpoint_labels)
 
     summary: Dict[str, Any] = {
         "counts": {
@@ -415,11 +927,34 @@ def main(argv: Optional[List[str]] = None) -> None:
             "reference_patients": len(ref_patients),
         },
         "constraints": evaluate_constraints(cf_patients),
-        "distribution_metrics": compute_distribution_metrics(cf_patients, ref_patients),
-        "scenario_metrics": compute_scenario_metrics(cf_patients, ref_patients),
+        "status_labels": status_labels,
+        "endpoint_labels": endpoint_labels,
+        "distribution_metrics": compute_distribution_metrics(
+            cf_patients, ref_patients, args.bootstrap, seed_value
+        ),
+        "scenario_metrics": {
+            "status": compute_scenario_metrics(
+                cf_patients,
+                ref_patients,
+                status_labels,
+                "status_probabilities",
+                "status_at_last_follow_up",
+                args.bootstrap,
+                seed_value,
+            ),
+            "endpoint": compute_scenario_metrics(
+                cf_patients,
+                ref_patients,
+                endpoint_labels,
+                "endpoint_probabilities",
+                "treatment_endpoint_category",
+                args.bootstrap,
+                seed_value,
+            ) if endpoint_labels else {},
+        },
         "kl_metrics": compute_kl_metrics(cf_patients, ref_patients),
         "scenario_risks": compute_scenario_risks(
-            cf_patients, args.risk_feature, args.bootstrap, args.seed
+            cf_patients, args.risk_feature, args.bootstrap, seed_value
         ),
     }
 
