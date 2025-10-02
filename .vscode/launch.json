@@ -1,0 +1,93 @@
+{
+    // Use IntelliSense to learn about possible attributes.
+    // Hover to view descriptions of existing attributes.
+    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Python Debugger: Current File with Arguments",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${file}",
+            "console": "integratedTerminal",
+            "args": "${command:pickArgs}",
+            "python": "/home/andrea/miniconda3/envs/dtcygan-env/bin/python",
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}/src"
+            }
+        },
+        {
+            "name": "Generate Synthetic Data",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/generate_data.py",
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}/src",
+            "python": "/home/andrea/miniconda3/envs/dtcygan-env/bin/python",
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}/src"
+            },
+            "args": [
+                "--patients", "1000",
+                "--timesteps", "8",
+                "--output", "${workspaceFolder}/data/syntects.json",
+                "--schema", "${workspaceFolder}/src/config/synthetic.yaml"
+            ]
+        },
+        {
+            "name": "Train Temporal CycleGAN",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/train.py",
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}",
+            "python": "/home/andrea/miniconda3/envs/dtcygan-env/bin/python",
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}/src"
+            },
+            "args": [
+                "--config", "${workspaceFolder}/src/config/training.yaml",
+                "--synthetic-data", "${workspaceFolder}/data/syntects.json",
+                "--schema", "${workspaceFolder}/src/config/synthetic.yaml",
+                "--patients", "1000",
+                "--timesteps", "8",
+                "--checkpoint-dir", "${workspaceFolder}/data/models"
+            ]
+        },
+        {
+            "name": "Analyze Counterfactual Outputs",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/analyze.py",
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}",
+            "python": "/home/andrea/miniconda3/envs/dtcygan-env/bin/python",
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}/src"
+            },
+            "args": [
+                "--checkpoint", "${workspaceFolder}/data/models/dtcygan_20250928_135339.pt",
+                "--dataset", "${workspaceFolder}/data/syntects.json",
+                "--samples", "32",
+                "--image-dir", "${workspaceFolder}/imgs/analysis"
+            ]
+        },
+        {
+            "name": "Validate Counterfactual Trajectories",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/validate.py",
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}",
+            "python": "/home/andrea/miniconda3/envs/dtcygan-env/bin/python",
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}/src"
+            },
+            "args": [
+                "--checkpoint", "${workspaceFolder}/data/models/dtcygan_20250928_135339.pt",
+                "--dataset", "${workspaceFolder}/data/syntects.json",
+                "--output", "${workspaceFolder}/data/validation_report.json"
+            ]
+        }
+    ]
+}

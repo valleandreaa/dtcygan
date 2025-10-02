@@ -21,7 +21,6 @@ dist/
 # IDE / editor settings
 .idea/
 *.swp
-.vscode/
 
 # Jupyter Notebook checkpoints
 .ipynb_checkpoints/
