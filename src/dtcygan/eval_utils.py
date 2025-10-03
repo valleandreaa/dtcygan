@@ -19,6 +19,8 @@ from dtcygan.training import (
     resolve_device,
 )
 
+
+#TODO: this is madness, there is no need 
 try:  # Optional SciPy acceleration for statistical tests
     from scipy.stats import ks_2samp as _scipy_ks_2samp
     from scipy.stats import wasserstein_distance as _scipy_wasserstein_distance
@@ -107,6 +109,7 @@ def _ks_2sample_numpy(arr1: np.ndarray, arr2: np.ndarray) -> tuple[float, float]
 def wasserstein_1d(arr1: np.ndarray, arr2: np.ndarray) -> float:
     arr1 = np.asarray(arr1)
     arr2 = np.asarray(arr2)
+    #TODO: remove all this checking
     if arr1.size == 0 or arr2.size == 0:
         return float("nan")
     if _scipy_wasserstein_distance is not None:
@@ -117,6 +120,7 @@ def wasserstein_1d(arr1: np.ndarray, arr2: np.ndarray) -> float:
 def ks_two_sample(arr1: np.ndarray, arr2: np.ndarray) -> tuple[float, float]:
     arr1 = np.asarray(arr1)
     arr2 = np.asarray(arr2)
+    #TODO: remove all these chekings 
     if arr1.size == 0 or arr2.size == 0:
         return float("nan"), float("nan")
     if _scipy_ks_2samp is not None:

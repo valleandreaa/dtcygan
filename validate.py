@@ -13,6 +13,8 @@ from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 import numpy as np
 import torch
 
+
+
 from dtcygan.training import (
     Config,
     SyntheticSequenceDataset,
@@ -20,7 +22,7 @@ from dtcygan.training import (
     resolve_device,
     set_seed,
 )
-from dtcygan.eval_utils import bootstrap_two_sample_ci, wasserstein_1d, ks_two_sample
+
 from dtcygan.eval_utils import (
     load_dataset_payload,
     load_dataset,
@@ -94,7 +96,7 @@ PROBABILITY_ONLY_FEATURES = {
 
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Validate synthetic counterfactual trajectories against clinical constraints and empirical data."
+        description="Validate synthetic counterfactual trajectories against clinical.4"
     )
     parser.add_argument(
         "--counterfactual",
@@ -259,6 +261,8 @@ def build_counterfactual_patients(
         if len(categories) == 1:
             return {categories[0]: 1.0}
         if len(categories) == 2:
+            #TODO: check if here is correc to apply sigmoid (the ooutput should be already in 
+            # in probabilities)
             prob_positive = 1.0 / (1.0 + math.exp(-raw_value))
             return {
                 categories[0]: float(1.0 - prob_positive),
@@ -521,7 +525,11 @@ def _ks_2sample_numpy(arr1: np.ndarray, arr2: np.ndarray) -> tuple[float, float]
 
 
 
-
+#TODO: in compute_distribution_metrics i need to make sure i am comparing the patients with same treatments.
+#as it described here: To evaluate counterfactual fidelity in settings where an alternative treatment arm
+#  is represented in the registry, we identified subpopulations of patients who actually
+#  received ˜ T and matched them to patients who received T. 
+# 
 def compute_distribution_metrics(
     synthetic_patients: List[Dict[str, Any]],
     reference_patients: List[Dict[str, Any]],
@@ -552,6 +560,7 @@ def compute_distribution_metrics(
         )
 
         ks_stat, ks_pvalue = ks_two_sample(syn_array, ref_array)
+        #TODO: the ks_ci here is not really required, remove it 
         ks_ci = bootstrap_two_sample_ci(
             syn_array,
             ref_array,
@@ -868,6 +877,7 @@ def generate_report(summary: Dict[str, Any]) -> str:
 
     return "\n".join(lines)
 
+#TODO: influence function is missing, check from the original script and integrate (check the name of implementatioj, mayb it is)
 
 def main(argv: Optional[List[str]] = None) -> None:
     args = build_arg_parser().parse_args(argv)
@@ -875,7 +885,10 @@ def main(argv: Optional[List[str]] = None) -> None:
     if bool(args.counterfactual) ^ bool(args.reference):
         raise ValueError("Both --counterfactual and --reference must be provided together.")
 
+    # retrieve model
     cfg, metadata, generator, validation_ids, device = load_checkpoint_bundle(args.checkpoint)
+    
+    # seed definition
     seed_value = args.seed if args.seed is not None else cfg.seed
     if seed_value is not None:
         set_seed(seed_value)
@@ -883,29 +896,29 @@ def main(argv: Optional[List[str]] = None) -> None:
     dataset_status_labels: List[str] = []
     dataset_endpoint_labels: List[str] = []
 
-    if args.counterfactual:
-        cf_patients = filter_patients(load_dataset(args.counterfactual), validation_ids)
-        ref_patients = filter_patients(load_dataset(args.reference), validation_ids)
-    else:
-        dataset_payload = load_dataset_payload(args.dataset)
-        dataset = SyntheticSequenceDataset(
-            dataset_payload,
-            cfg.seq_len,
-            spec_clinical=metadata.get("clinical_feature_spec"),
-            spec_treatment=metadata.get("treatment_feature_spec"),
-        )
-        dataset_status_labels = list(dataset.treat_categories.get("status_at_last_follow_up", OUTCOME_LABELS))
-        dataset_endpoint_labels = list(dataset.treat_categories.get("treatment_endpoint_category", []))
-        cf_patients = build_counterfactual_patients(
-            dataset,
-            generator,
-            device,
-            validation_ids,
-            status_labels=dataset_status_labels,
-            endpoint_labels=dataset_endpoint_labels,
-            samples_per_patient=max(1, args.samples),
-        )
-        ref_patients = filter_patients(dataset_payload["patients"], validation_ids)
+    #TODO: make sure here it inference the data points correctly
+    #TODO: remove the option for counteractuals 
+    dataset_payload = load_dataset_payload(args.dataset)
+    dataset = SyntheticSequenceDataset(
+        dataset_payload,
+        cfg.seq_len,
+        spec_clinical=metadata.get("clinical_feature_spec"),
+        spec_treatment=metadata.get("treatment_feature_spec"),
+    )
+    dataset_status_labels = list(dataset.treat_categories.get("status_at_last_follow_up", OUTCOME_LABELS))
+    dataset_endpoint_labels = list(dataset.treat_categories.get("treatment_endpoint_category", []))
+    
+    #TODO: make sure the patients are subjected to both the same treatment for counterfactual and real 
+    cf_patients = build_counterfactual_patients(
+        dataset,
+        generator,
+        device,
+        validation_ids,
+        status_labels=dataset_status_labels,
+        endpoint_labels=dataset_endpoint_labels,
+        samples_per_patient=max(1, args.samples),
+    )
+    ref_patients = filter_patients(dataset_payload["patients"], validation_ids)
 
     status_labels = sorted(
         set(dataset_status_labels or OUTCOME_LABELS)
@@ -952,6 +965,8 @@ def main(argv: Optional[List[str]] = None) -> None:
                 seed_value,
             ) if endpoint_labels else {},
         },
+        #TODO: check if also in KL bootstrapping is applied
+        #TODO: check if the original fucntions are the same as this one
         "kl_metrics": compute_kl_metrics(cf_patients, ref_patients),
         "scenario_risks": compute_scenario_risks(
             cf_patients, args.risk_feature, args.bootstrap, seed_value
