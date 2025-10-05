@@ -705,12 +705,24 @@ def compute_kl_metrics(
             scenario = scenario_label(final_record(patient.get("actual_treatment", [])))
             if scenario not in TREATMENT_SCENARIOS:
                 continue
-            status = final_record(patient.get("treatment", [])).get("status_at_last_follow_up")
-            if status not in OUTCOME_LABELS:
-                continue
-            i = TREATMENT_SCENARIOS.index(scenario)
-            j = OUTCOME_LABELS.index(status)
-            counts[i, j] += 1
+            
+            # Check if this is a synthetic patient with probabilities
+            status_probs = patient.get("status_probabilities")
+            if status_probs and isinstance(status_probs, dict):
+                # For synthetic patients, use probabilistic outcomes
+                i = TREATMENT_SCENARIOS.index(scenario)
+                for status_label, prob in status_probs.items():
+                    if status_label in OUTCOME_LABELS:
+                        j = OUTCOME_LABELS.index(status_label)
+                        counts[i, j] += prob
+            else:
+                # For reference patients, use deterministic outcomes
+                status = final_record(patient.get("treatment", [])).get("status_at_last_follow_up")
+                if status not in OUTCOME_LABELS:
+                    continue
+                i = TREATMENT_SCENARIOS.index(scenario)
+                j = OUTCOME_LABELS.index(status)
+                counts[i, j] += 1
         if counts.sum() == 0:
             return counts
         return counts / counts.sum()
