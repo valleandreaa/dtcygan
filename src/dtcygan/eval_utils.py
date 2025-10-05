@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import math
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
@@ -19,14 +18,7 @@ from dtcygan.training import (
     resolve_device,
 )
 
-
-#TODO: this is madness, there is no need 
-try:  # Optional SciPy acceleration for statistical tests
-    from scipy.stats import ks_2samp as _scipy_ks_2samp
-    from scipy.stats import wasserstein_distance as _scipy_wasserstein_distance
-except Exception:  # pragma: no cover - SciPy might be unavailable
-    _scipy_ks_2samp = None
-    _scipy_wasserstein_distance = None
+from scipy.stats import ks_2samp, wasserstein_distance
 
 
 def load_dataset_payload(path: str | Path) -> Dict[str, Any]:
@@ -76,57 +68,21 @@ def bootstrap_two_sample_ci(
     return float(low), float(high)
 
 
-def _wasserstein_distance_numpy(arr1: np.ndarray, arr2: np.ndarray, bins: int = 512) -> float:
-    if arr1.size == 0 or arr2.size == 0:
-        return float("nan")
-    min_v = min(arr1.min(), arr2.min())
-    max_v = max(arr1.max(), arr2.max())
-    if math.isclose(min_v, max_v):
-        return 0.0
-    grid = np.linspace(min_v, max_v, bins)
-    cdf1 = np.searchsorted(np.sort(arr1), grid, side="right") / arr1.size
-    cdf2 = np.searchsorted(np.sort(arr2), grid, side="right") / arr2.size
-    return float(np.trapz(np.abs(cdf1 - cdf2), grid))
-
-
-def _ks_2sample_numpy(arr1: np.ndarray, arr2: np.ndarray) -> tuple[float, float]:
-    arr1 = np.sort(arr1)
-    arr2 = np.sort(arr2)
-    n1 = arr1.size
-    n2 = arr2.size
-    if n1 == 0 or n2 == 0:
-        return float("nan"), float("nan")
-    data_all = np.concatenate([arr1, arr2])
-    data_all.sort()
-    cdf1 = np.searchsorted(arr1, data_all, side="right") / n1
-    cdf2 = np.searchsorted(arr2, data_all, side="right") / n2
-    d_stat = float(np.max(np.abs(cdf1 - cdf2)))
-    n_eff = math.sqrt(n1 * n2 / (n1 + n2))
-    p_val = min(1.0, 2.0 * math.exp(-2.0 * (d_stat * n_eff) ** 2))
-    return d_stat, p_val
-
-
 def wasserstein_1d(arr1: np.ndarray, arr2: np.ndarray) -> float:
     arr1 = np.asarray(arr1)
     arr2 = np.asarray(arr2)
-    #TODO: remove all this checking
     if arr1.size == 0 or arr2.size == 0:
         return float("nan")
-    if _scipy_wasserstein_distance is not None:
-        return float(_scipy_wasserstein_distance(arr1, arr2))
-    return _wasserstein_distance_numpy(arr1, arr2)
+    return float(wasserstein_distance(arr1, arr2))
 
 
 def ks_two_sample(arr1: np.ndarray, arr2: np.ndarray) -> tuple[float, float]:
     arr1 = np.asarray(arr1)
     arr2 = np.asarray(arr2)
-    #TODO: remove all these chekings 
     if arr1.size == 0 or arr2.size == 0:
         return float("nan"), float("nan")
-    if _scipy_ks_2samp is not None:
-        stat, p_val = _scipy_ks_2samp(arr1, arr2, alternative="two-sided", mode="auto")
-        return float(stat), float(p_val)
-    return _ks_2sample_numpy(arr1, arr2)
+    stat, p_val = ks_2samp(arr1, arr2, alternative="two-sided", mode="auto")
+    return float(stat), float(p_val)
 
 
 def collect_labels_from_patients(

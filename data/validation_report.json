@@ -1,23 +1,23 @@
 {
   "counts": {
-    "patients": 800,
-    "reference_patients": 200
+    "patients": 124,
+    "reference_patients": 124
   },
   "constraints": {
-    "total_timesteps": 6400,
-    "invalid_timesteps": 13236,
-    "invalid_fraction": 2.068125,
-    "invalid_patients": 800,
+    "total_timesteps": 992,
+    "invalid_timesteps": 2017,
+    "invalid_fraction": 2.033266129032258,
+    "invalid_patients": 124,
     "invalid_patient_fraction": 1.0,
     "violations": {
-      "chemotherapy_cycles": 3140,
-      "chemotherapy_duration_days": 824,
-      "guideline::radiotherapy_fraction_count": 1540,
-      "guideline::radiotherapy_total_dose_gy": 1396,
-      "patient_reported_outcome_score": 1964,
-      "radiotherapy_dose_per_fraction_gy": 1436,
-      "radiotherapy_fraction_count": 1540,
-      "radiotherapy_total_dose_gy": 1396
+      "chemotherapy_cycles": 490,
+      "chemotherapy_duration_days": 125,
+      "guideline::radiotherapy_fraction_count": 229,
+      "guideline::radiotherapy_total_dose_gy": 203,
+      "patient_reported_outcome_score": 315,
+      "radiotherapy_dose_per_fraction_gy": 223,
+      "radiotherapy_fraction_count": 229,
+      "radiotherapy_total_dose_gy": 203
     }
   },
   "status_labels": [
@@ -31,56 +31,40 @@
   ],
   "distribution_metrics": {
     "tumour_size_before_treatment_mm": {
-      "w1": 172.33918823546807,
+      "w1": 172.6794806912067,
       "w1_ci": [
-        166.14937263989515,
-        178.7035914190573
+        164.85988102414618,
+        181.23879158829237
       ],
-      "ks_stat": 0.9891304347826086,
-      "ks_ci": [
-        0.9822134387351779,
-        0.9950592885375494
-      ],
+      "ks_stat": 0.9872611464968153,
       "ks_pvalue": 0.0
     },
     "radiotherapy_total_dose_gy": {
-      "w1": 38.28976468763882,
+      "w1": 38.26268815332153,
       "w1_ci": [
-        36.11131194832482,
-        40.446913891427734
+        35.27840950720562,
+        41.05260678295689
       ],
       "ks_stat": 1.0,
-      "ks_ci": [
-        1.0,
-        1.0
-      ],
-      "ks_pvalue": 5e-324
+      "ks_pvalue": 3.0580327616444453e-121
     },
     "radiotherapy_fraction_count": {
-      "w1": 22.389749224464616,
+      "w1": 22.516180777653858,
       "w1_ci": [
-        21.293853523847346,
-        23.549470104296482
+        21.287830404423207,
+        23.893923080383953
       ],
       "ks_stat": 1.0,
-      "ks_ci": [
-        1.0,
-        1.0
-      ],
-      "ks_pvalue": 5e-324
+      "ks_pvalue": 7.211435428837765e-137
     },
     "patient_reported_outcome_score": {
-      "w1": 4.328065902142806,
+      "w1": 4.312422178129165,
       "w1_ci": [
-        4.302174627433287,
-        4.356418898871959
+        4.265484226358504,
+        4.356005535369147
       ],
       "ks_stat": 1.0,
-      "ks_ci": [
-        1.0,
-        1.0
-      ],
-      "ks_pvalue": 5e-324
+      "ks_pvalue": 1.4126522957731641e-188
     }
   },
   "scenario_metrics": {
@@ -88,213 +72,165 @@
       "S": {
         "AWD": {
           "sample_sizes": {
-            "synthetic": 200,
+            "synthetic": 27,
             "reference": 27
           },
-          "delta_mean": 0.36999742082034887,
+          "delta_mean": 0.3699973832395525,
           "delta_ci": [
-            0.18481223713838132,
-            0.5551826053588
+            0.18481221486019023,
+            0.5551825890041444
           ],
           "ks_stat": 0.6296296296296297,
-          "ks_ci": [
-            0.5185185185185185,
-            0.8148148148148148
-          ],
-          "ks_pvalue": 1.5007134863521756e-09
+          "ks_pvalue": 2.4582904691073025e-05
         },
         "DOD": {
           "sample_sizes": {
-            "synthetic": 200,
+            "synthetic": 27,
             "reference": 27
           },
-          "delta_mean": 0.05112560080536497,
+          "delta_mean": 0.05112811517559373,
           "delta_ci": [
-            0.05112133544902628,
-            0.05113029957506133
+            0.051119772188265813,
+            0.05113491615199067
           ],
           "ks_stat": 1.0,
-          "ks_ci": [
-            1.0,
-            1.0
-          ],
-          "ks_pvalue": 2.658379263294134e-35
+          "ks_pvalue": 1.027253325734171e-15
         },
         "NED": {
           "sample_sizes": {
-            "synthetic": 200,
+            "synthetic": 27,
             "reference": 27
           },
-          "delta_mean": 0.5781310792742431,
+          "delta_mean": 0.578128527323218,
           "delta_ci": [
-            0.3929460381040677,
-            0.7633150081945663
+            0.3929446696598297,
+            0.7633094771842397
           ],
           "ks_stat": 0.6296296296296297,
-          "ks_ci": [
-            0.5185185185185185,
-            0.8148148148148148
-          ],
-          "ks_pvalue": 1.5007134863521756e-09
+          "ks_pvalue": 2.4582904691073025e-05
         }
       },
       "S+CT": {
         "AWD": {
           "sample_sizes": {
-            "synthetic": 200,
+            "synthetic": 37,
             "reference": 37
           },
-          "delta_mean": 0.32395137882967817,
+          "delta_mean": 0.3239513524924438,
           "delta_ci": [
-            0.16178924661039076,
-            0.48611351880542847
+            0.18881588819137868,
+            0.48611344924202127
           ],
           "ks_stat": 0.6756756756756757,
-          "ks_ci": [
-            0.5135135135135135,
-            0.8378378378378378
-          ],
-          "ks_pvalue": 2.4097699632047976e-14
+          "ks_pvalue": 2.5134508901704446e-08
         },
         "DOD": {
           "sample_sizes": {
-            "synthetic": 200,
+            "synthetic": 37,
             "reference": 37
           },
-          "delta_mean": 0.024098303222271827,
+          "delta_mean": 0.024100044092693007,
           "delta_ci": [
-            0.0029258229342102714,
-            0.05112976872228848
+            0.0029167756965679196,
+            0.05115009659687836
           ],
           "ks_stat": 0.972972972972973,
-          "ks_ci": [
-            0.9182432432432434,
-            1.0
-          ],
-          "ks_pvalue": 6.199155660695237e-38
+          "ks_pvalue": 8.475883935764651e-20
         },
         "NED": {
           "sample_sizes": {
-            "synthetic": 200,
+            "synthetic": 37,
             "reference": 37
           },
-          "delta_mean": 0.48904226479659546,
+          "delta_mean": 0.48904049758894014,
           "delta_ci": [
-            0.326877952912238,
-            0.6512023649058796
+            0.3268774679274244,
+            0.651202581720776
           ],
           "ks_stat": 0.5405405405405406,
-          "ks_ci": [
-            0.5135135135135135,
-            0.7027027027027027
-          ],
-          "ks_pvalue": 5.483621834581102e-09
+          "ks_pvalue": 2.6284010564309513e-05
         }
       },
       "S+RT": {
         "AWD": {
           "sample_sizes": {
-            "synthetic": 200,
+            "synthetic": 20,
             "reference": 20
           },
-          "delta_mean": 0.19962705339000322,
+          "delta_mean": 0.19962701095957958,
           "delta_ci": [
-            0.04962703855280702,
-            0.3508771327226162
+            0.04962694408482303,
+            0.3996269003573848
           ],
           "ks_stat": 0.8,
-          "ks_ci": [
-            0.6,
-            0.95
-          ],
-          "ks_pvalue": 1.2942243529752269e-12
+          "ks_pvalue": 1.3259673752008224e-06
         },
         "DOD": {
           "sample_sizes": {
-            "synthetic": 200,
+            "synthetic": 20,
             "reference": 20
           },
-          "delta_mean": 0.001125404669899667,
+          "delta_mean": 0.0011282390013291899,
           "delta_ci": [
-            0.0011219926329451954,
-            0.09887509251259961
+            0.001118364344641583,
+            0.09887522835659093
           ],
           "ks_stat": 0.95,
-          "ks_ci": [
-            0.85,
-            1.0
-          ],
-          "ks_pvalue": 5.0483433194010815e-21
+          "ks_pvalue": 5.803555641539872e-10
         },
         "NED": {
           "sample_sizes": {
-            "synthetic": 200,
+            "synthetic": 20,
             "reference": 20
           },
-          "delta_mean": 0.5485016487201037,
+          "delta_mean": 0.5484987719582504,
           "delta_ci": [
-            0.34850071987060566,
-            0.7485016345359758
+            0.34849169669824687,
+            0.7497615126502158
           ],
           "ks_stat": 0.6,
-          "ks_ci": [
-            0.5,
-            0.8
-          ],
-          "ks_pvalue": 1.0889806374160417e-06
+          "ks_pvalue": 0.001115801546231492
         }
       },
       "S+RT+CT": {
         "AWD": {
           "sample_sizes": {
-            "synthetic": 200,
+            "synthetic": 40,
             "reference": 40
           },
-          "delta_mean": 0.27462705736373466,
+          "delta_mean": 0.27462702192892985,
           "delta_ci": [
-            0.12462710885236702,
-            0.4246269756183652
+            0.1490018781325661,
+            0.39962709643568356
           ],
           "ks_stat": 0.725,
-          "ks_ci": [
-            0.575,
-            0.85
-          ],
-          "ks_pvalue": 9.781382192537656e-18
+          "ks_pvalue": 1.9492045580662636e-10
         },
         "DOD": {
           "sample_sizes": {
-            "synthetic": 200,
+            "synthetic": 40,
             "reference": 40
           },
-          "delta_mean": 0.026125139552737903,
+          "delta_mean": 0.026127506381631922,
           "delta_ci": [
-            0.0011225909157931329,
-            0.05112870962551416
+            0.0011227294423474124,
+            0.05113533860166019
           ],
           "ks_stat": 0.975,
-          "ks_ci": [
-            0.925,
-            1.0
-          ],
-          "ks_pvalue": 3.86589323230027e-40
+          "ks_pvalue": 1.4882722924829015e-21
         },
         "NED": {
           "sample_sizes": {
-            "synthetic": 200,
+            "synthetic": 40,
             "reference": 40
           },
-          "delta_mean": 0.6485019178109968,
+          "delta_mean": 0.6484995155472979,
           "delta_ci": [
-            0.49850263781912046,
-            0.773504418374525
+            0.4985006545305566,
+            0.7984923326613623
           ],
           "ks_stat": 0.7,
-          "ks_ci": [
-            0.55,
-            0.8256249999999994
-          ],
-          "ks_pvalue": 2.1696821034310736e-16
+          "ks_pvalue": 1.1207926208881015e-09
         }
       }
     },
@@ -302,185 +238,327 @@
       "S": {
         "LR": {
           "sample_sizes": {
-            "synthetic": 200,
+            "synthetic": 27,
             "reference": 27
           },
-          "delta_mean": 0.6464470668866726,
+          "delta_mean": 0.962962962962963,
           "delta_ci": [
-            0.565191336660694,
-            0.6906742630746613
+            0.8888888888888888,
+            1.0
           ],
-          "ks_stat": 0.947962962962963,
-          "ks_ci": [
-            0.8688888888888889,
-            0.995
-          ],
-          "ks_pvalue": 9.278392167101602e-27
+          "ks_stat": 0.9629629629629629,
+          "ks_pvalue": 5.547167958964523e-14
         },
         "MET": {
           "sample_sizes": {
-            "synthetic": 200,
+            "synthetic": 27,
             "reference": 27
           },
-          "delta_mean": 0.15336774792814212,
+          "delta_mean": 0.14814814814814814,
           "delta_ci": [
-            0.030110391463508253,
-            0.26752278722222356
+            0.037037037037037035,
+            0.2962962962962963
           ],
-          "ks_stat": 0.8368518518518518,
-          "ks_ci": [
-            0.6885787037037037,
-            0.952962962962963
-          ],
-          "ks_pvalue": 2.501797083188858e-18
+          "ks_stat": 0.14814814814814814,
+          "ks_pvalue": 0.9356622290518453
         }
       },
       "S+CT": {
         "LR": {
           "sample_sizes": {
-            "synthetic": 200,
+            "synthetic": 37,
             "reference": 37
           },
-          "delta_mean": 0.5753774388343958,
+          "delta_mean": 0.8918918918918919,
           "delta_ci": [
-            0.47395648002325047,
-            0.6636161452302014
+            0.7837837837837838,
+            0.972972972972973
           ],
-          "ks_stat": 0.8768918918918919,
-          "ks_ci": [
-            0.7687094594594595,
-            0.967972972972973
-          ],
-          "ks_pvalue": 8.169094192307826e-27
+          "ks_stat": 0.8918918918918919,
+          "ks_pvalue": 1.3179151931720458e-15
         },
         "MET": {
           "sample_sizes": {
-            "synthetic": 200,
+            "synthetic": 37,
             "reference": 37
           },
-          "delta_mean": 0.022809871266828208,
+          "delta_mean": 0.32432432432432434,
           "delta_ci": [
-            0.0015390078364875867,
-            0.1849808488314998
+            0.1891891891891892,
+            0.4864864864864865
           ],
-          "ks_stat": 0.6606756756756756,
-          "ks_ci": [
-            0.5135135135135135,
-            0.8078378378378378
-          ],
-          "ks_pvalue": 1.161302814636913e-13
+          "ks_stat": 0.32432432432432434,
+          "ks_pvalue": 0.04015613435465163
         }
       },
       "S+RT": {
         "LR": {
           "sample_sizes": {
-            "synthetic": 200,
+            "synthetic": 20,
             "reference": 20
           },
-          "delta_mean": 0.5834851198881006,
+          "delta_mean": 0.9,
           "delta_ci": [
-            0.4299749976425243,
-            0.6872220067284602
+            0.75,
+            1.0
           ],
-          "ks_stat": 0.885,
-          "ks_ci": [
-            0.74,
-            0.99
-          ],
-          "ks_pvalue": 1.7173413428851124e-16
+          "ks_stat": 0.9,
+          "ks_pvalue": 1.1316933501002751e-08
         },
         "MET": {
           "sample_sizes": {
-            "synthetic": 200,
+            "synthetic": 20,
             "reference": 20
           },
-          "delta_mean": 0.2515148801118995,
+          "delta_mean": 0.05,
           "delta_ci": [
-            0.14833079571575253,
-            0.30472267325234587
+            0.0,
+            0.15
           ],
-          "ks_stat": 0.935,
-          "ks_ci": [
-            0.825,
-            1.0
-          ],
-          "ks_pvalue": 9.635463596231163e-20
+          "ks_stat": 0.05,
+          "ks_pvalue": 0.9999999999999998
         }
       },
       "S+RT+CT": {
         "LR": {
           "sample_sizes": {
-            "synthetic": 200,
+            "synthetic": 40,
             "reference": 40
           },
-          "delta_mean": 0.6084865317400082,
+          "delta_mean": 0.925,
           "delta_ci": [
-            0.515646722909377,
-            0.6801241010778407
+            0.85,
+            1.0
           ],
-          "ks_stat": 0.91,
-          "ks_ci": [
-            0.81,
-            0.985
-          ],
-          "ks_pvalue": 1.8037476771085658e-31
+          "ks_stat": 0.925,
+          "ks_pvalue": 1.5284556443799398e-18
         },
         "MET": {
           "sample_sizes": {
-            "synthetic": 200,
+            "synthetic": 40,
             "reference": 40
           },
-          "delta_mean": 0.15151346825999182,
+          "delta_mean": 0.15,
           "delta_ci": [
-            0.027639994339094285,
-            0.252916369406609
+            0.05,
+            0.275
           ],
-          "ks_stat": 0.835,
-          "ks_ci": [
-            0.715,
-            0.94
-          ],
-          "ks_pvalue": 7.326814477095475e-25
+          "ks_stat": 0.15,
+          "ks_pvalue": 0.7659314523482239
         }
       }
     }
   },
   "kl_metrics": {
     "joint": NaN,
-    "marginal_outcome": NaN
+    "joint_ci": [
+      NaN,
+      NaN
+    ],
+    "marginal_outcome": NaN,
+    "marginal_outcome_ci": [
+      NaN,
+      NaN
+    ]
   },
   "scenario_risks": {
     "S": {
-      "risk": 4.9523354310255785,
-      "ci_low": 4.952299291170561,
-      "ci_high": 4.95236995788721,
-      "ci_width_percent": 0.0014269372023207351,
-      "se": 1.8635776813349442e-05,
-      "sample_size": 65
+      "risk": 4.952252344651655,
+      "ci_low": 4.952222126180475,
+      "ci_high": 4.952283384583213,
+      "ci_width_percent": 0.0012369806398117122,
+      "se": 1.5093306376359332e-05,
+      "sample_size": 11
     },
     "S+CT": {
-      "risk": 4.952336773505578,
-      "ci_low": 4.952300362953773,
-      "ci_high": 4.952371496604039,
-      "ci_width_percent": 0.0014363653668845067,
-      "se": 1.868813998112422e-05,
-      "sample_size": 65
+      "risk": 4.952374371615323,
+      "ci_low": 4.952279539541765,
+      "ci_high": 4.952475745027716,
+      "ci_width_percent": 0.0039618468077724876,
+      "se": 5.0945497800016466e-05,
+      "sample_size": 11
     },
     "S+RT": {
-      "risk": 4.952336516747108,
-      "ci_low": 4.952300384044647,
-      "ci_high": 4.952371246814727,
-      "ci_width_percent": 0.0014308956962162918,
-      "se": 1.864959868609369e-05,
-      "sample_size": 65
+      "risk": 4.952258682250976,
+      "ci_low": 4.952183532714844,
+      "ci_high": 4.952353382110596,
+      "ci_width_percent": 0.0034297359376890117,
+      "se": 4.33454326488695e-05,
+      "sample_size": 5
     },
     "S+RT+CT": {
-      "risk": 4.952337785867544,
-      "ci_low": 4.952301439505357,
-      "ci_high": 4.952372486224542,
-      "ci_width_percent": 0.0014346097188254199,
-      "se": 1.8697033867508567e-05,
-      "sample_size": 65
+      "risk": 4.952373282114665,
+      "ci_low": 4.952298096021017,
+      "ci_high": 4.952447899977366,
+      "ci_width_percent": 0.0030248922650886597,
+      "se": 3.845479217155513e-05,
+      "sample_size": 15
+    }
+  },
+  "natural_experiments": {
+    "S": {
+      "DOD": {
+        "sample_sizes": {
+          "synthetic": 27,
+          "reference": 27
+        },
+        "delta_mean": 0.05112811517559373,
+        "delta_ci": [
+          0.051119638430311067,
+          0.05113498783871803
+        ],
+        "ks_stat": 1.0,
+        "ks_pvalue": 1.027253325734171e-15
+      },
+      "NED": {
+        "sample_sizes": {
+          "synthetic": 27,
+          "reference": 27
+        },
+        "delta_mean": 0.578128527323218,
+        "delta_ci": [
+          0.39294245520015875,
+          0.7633090198587471
+        ],
+        "ks_stat": 0.6296296296296297,
+        "ks_pvalue": 2.4582904691073025e-05
+      },
+      "AWD": {
+        "sample_sizes": {
+          "synthetic": 27,
+          "reference": 27
+        },
+        "delta_mean": 0.3699973832395525,
+        "delta_ci": [
+          0.22184915552247822,
+          0.5551825715816484
+        ],
+        "ks_stat": 0.6296296296296297,
+        "ks_pvalue": 2.4582904691073025e-05
+      }
+    },
+    "S+CT": {
+      "DOD": {
+        "sample_sizes": {
+          "synthetic": 37,
+          "reference": 37
+        },
+        "delta_mean": 0.024100044092693007,
+        "delta_ci": [
+          0.002916737707287515,
+          0.05114468638477164
+        ],
+        "ks_stat": 0.972972972972973,
+        "ks_pvalue": 8.475883935764651e-20
+      },
+      "NED": {
+        "sample_sizes": {
+          "synthetic": 37,
+          "reference": 37
+        },
+        "delta_mean": 0.48904049758894014,
+        "delta_ci": [
+          0.32688612566909586,
+          0.6512114374486826
+        ],
+        "ks_stat": 0.5405405405405406,
+        "ks_pvalue": 2.6284010564309513e-05
+      },
+      "AWD": {
+        "sample_sizes": {
+          "synthetic": 37,
+          "reference": 37
+        },
+        "delta_mean": 0.3239513524924438,
+        "delta_ci": [
+          0.18881602005206852,
+          0.48611315991904414
+        ],
+        "ks_stat": 0.6756756756756757,
+        "ks_pvalue": 2.5134508901704446e-08
+      }
+    },
+    "S+RT": {
+      "DOD": {
+        "sample_sizes": {
+          "synthetic": 20,
+          "reference": 20
+        },
+        "delta_mean": 0.0011282390013291899,
+        "delta_ci": [
+          0.0011185211394228547,
+          0.09887710275929312
+        ],
+        "ks_stat": 0.95,
+        "ks_pvalue": 5.803555641539872e-10
+      },
+      "NED": {
+        "sample_sizes": {
+          "synthetic": 20,
+          "reference": 20
+        },
+        "delta_mean": 0.5484987719582504,
+        "delta_ci": [
+          0.34849426970211705,
+          0.7485019864648238
+        ],
+        "ks_stat": 0.6,
+        "ks_pvalue": 0.001115801546231492
+      },
+      "AWD": {
+        "sample_sizes": {
+          "synthetic": 20,
+          "reference": 20
+        },
+        "delta_mean": 0.19962701095957958,
+        "delta_ci": [
+          0.04962695189535091,
+          0.3996269526885836
+        ],
+        "ks_stat": 0.8,
+        "ks_pvalue": 1.3259673752008224e-06
+      }
+    },
+    "S+RT+CT": {
+      "DOD": {
+        "sample_sizes": {
+          "synthetic": 40,
+          "reference": 40
+        },
+        "delta_mean": 0.026127506381631922,
+        "delta_ci": [
+          0.0011223146364084569,
+          0.051134878554893695
+        ],
+        "ks_stat": 0.975,
+        "ks_pvalue": 1.4882722924829015e-21
+      },
+      "NED": {
+        "sample_sizes": {
+          "synthetic": 40,
+          "reference": 40
+        },
+        "delta_mean": 0.6484995155472979,
+        "delta_ci": [
+          0.49849946877225393,
+          0.7735042366254348
+        ],
+        "ks_stat": 0.7,
+        "ks_pvalue": 1.1207926208881015e-09
+      },
+      "AWD": {
+        "sample_sizes": {
+          "synthetic": 40,
+          "reference": 40
+        },
+        "delta_mean": 0.27462702192892985,
+        "delta_ci": [
+          0.149626957068563,
+          0.42462704811283075
+        ],
+        "ks_stat": 0.725,
+        "ks_pvalue": 1.9492045580662636e-10
+      }
     }
   }
 }

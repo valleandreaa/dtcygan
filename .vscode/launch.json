@@ -11,7 +11,7 @@
             "program": "${file}",
             "console": "integratedTerminal",
             "args": "${command:pickArgs}",
-            "python": "/home/andrea/miniconda3/envs/dtcygan-env/bin/python",
+            "python": "/home/andreavalle/miniconda3/envs/dtcygan-env/bin/python",
             "env": {
                 "PYTHONPATH": "${workspaceFolder}/src"
             }
@@ -23,7 +23,7 @@
             "program": "${workspaceFolder}/generate_data.py",
             "console": "integratedTerminal",
             "cwd": "${workspaceFolder}/src",
-            "python": "/home/andrea/miniconda3/envs/dtcygan-env/bin/python",
+            "python": "/home/andreavalle/miniconda3/envs/dtcygan-env/bin/python",
             "env": {
                 "PYTHONPATH": "${workspaceFolder}/src"
             },
@@ -41,7 +41,7 @@
             "program": "${workspaceFolder}/train.py",
             "console": "integratedTerminal",
             "cwd": "${workspaceFolder}",
-            "python": "/home/andrea/miniconda3/envs/dtcygan-env/bin/python",
+            "python": "/home/andreavalle/miniconda3/envs/dtcygan-env/bin/python",
             "env": {
                 "PYTHONPATH": "${workspaceFolder}/src"
             },
@@ -61,7 +61,7 @@
             "program": "${workspaceFolder}/analyze.py",
             "console": "integratedTerminal",
             "cwd": "${workspaceFolder}",
-            "python": "/home/andrea/miniconda3/envs/dtcygan-env/bin/python",
+            "python": "/home/andreavalle/miniconda3/envs/dtcygan-env/bin/python",
             "env": {
                 "PYTHONPATH": "${workspaceFolder}/src"
             },
@@ -79,7 +79,7 @@
             "program": "${workspaceFolder}/validate.py",
             "console": "integratedTerminal",
             "cwd": "${workspaceFolder}",
-            "python": "/home/andrea/miniconda3/envs/dtcygan-env/bin/python",
+            "python": "/home/andreavalle/miniconda3/envs/dtcygan-env/bin/python",
             "env": {
                 "PYTHONPATH": "${workspaceFolder}/src"
             },

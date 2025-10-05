@@ -8,7 +8,7 @@ import json
 import math
 from collections import defaultdict
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
 import numpy as np
 import torch
@@ -99,17 +99,9 @@ def build_arg_parser() -> argparse.ArgumentParser:
         description="Validate synthetic counterfactual trajectories against clinical.4"
     )
     parser.add_argument(
-        "--counterfactual",
-        help="Synthetic counterfactual dataset (JSON). When omitted the script generates counterfactuals using the checkpoint.",
-    )
-    parser.add_argument(
-        "--reference",
-        help="Empirical reference dataset (JSON). Required when --counterfactual is provided.",
-    )
-    parser.add_argument(
         "--dataset",
         default=str(Path("data") / "syntects.json"),
-        help="Dataset JSON used to rebuild counterfactuals when --counterfactual is absent (default: data/syntects.json).",
+        help="Dataset JSON used to rebuild counterfactuals (default: data/syntects.json).",
     )
     parser.add_argument(
         "--checkpoint",
@@ -133,6 +125,16 @@ def build_arg_parser() -> argparse.ArgumentParser:
         type=int,
         default=32,
         help="Stochastic counterfactual samples per patient when generating internally (default: 32).",
+    )
+    parser.add_argument(
+        "--natural-positive-label",
+        default="ALL",
+        help="Outcome label for natural experiment analysis (use ALL to evaluate every available label).",
+    )
+    parser.add_argument(
+        "--natural-match-cols",
+        nargs="*",
+        help="Optional columns used to match cohorts in natural experiment analysis; defaults to a predefined set.",
     )
     parser.add_argument("--seed", type=int, help="Optional RNG seed for bootstrapping.")
     return parser
@@ -261,12 +263,10 @@ def build_counterfactual_patients(
         if len(categories) == 1:
             return {categories[0]: 1.0}
         if len(categories) == 2:
-            #TODO: check if here is correc to apply sigmoid (the ooutput should be already in 
-            # in probabilities)
-            prob_positive = 1.0 / (1.0 + math.exp(-raw_value))
+            prob_positive = float(np.clip(raw_value, 0.0, 1.0))
             return {
                 categories[0]: float(1.0 - prob_positive),
-                categories[1]: float(prob_positive),
+                categories[1]: prob_positive,
             }
         positions = np.arange(len(categories), dtype=float)
         scores = -np.square(raw_value - positions)
@@ -525,27 +525,52 @@ def _ks_2sample_numpy(arr1: np.ndarray, arr2: np.ndarray) -> tuple[float, float]
 
 
 
-#TODO: in compute_distribution_metrics i need to make sure i am comparing the patients with same treatments.
-#as it described here: To evaluate counterfactual fidelity in settings where an alternative treatment arm
-#  is represented in the registry, we identified subpopulations of patients who actually
-#  received ˜ T and matched them to patients who received T. 
-# 
 def compute_distribution_metrics(
     synthetic_patients: List[Dict[str, Any]],
     reference_patients: List[Dict[str, Any]],
     n_boot: int,
     seed: Optional[int],
 ) -> Dict[str, Dict[str, float]]:
+    def collect_values(
+        patients: List[Dict[str, Any]],
+        feature: str,
+        scenario: str,
+        *,
+        synthetic: bool,
+    ) -> np.ndarray:
+        values: List[float] = []
+        for patient in patients:
+            if synthetic:
+                patient_scenario = patient.get("scenario")
+            else:
+                patient_scenario = scenario_label(final_record(patient.get("actual_treatment", [])))
+            if patient_scenario != scenario:
+                continue
+            for record in patient.get("treatment", []):
+                value = to_float(record.get(feature))
+                if value is not None:
+                    values.append(value)
+        return extract_feature(values)
+
     metrics: Dict[str, Dict[str, float]] = {}
     for idx, feature in enumerate(DISTRIBUTION_FEATURES):
-        syn_array = extract_feature(iter_feature_values(synthetic_patients, feature))
-        ref_array = extract_feature(iter_feature_values(reference_patients, feature))
+        syn_chunks: List[np.ndarray] = []
+        ref_chunks: List[np.ndarray] = []
+        for scenario in TREATMENT_SCENARIOS:
+            syn_vals = collect_values(synthetic_patients, feature, scenario, synthetic=True)
+            ref_vals = collect_values(reference_patients, feature, scenario, synthetic=False)
+            if syn_vals.size == 0 or ref_vals.size == 0:
+                continue
+            syn_chunks.append(syn_vals)
+            ref_chunks.append(ref_vals)
+
+        syn_array = np.concatenate(syn_chunks) if syn_chunks else np.array([], dtype=float)
+        ref_array = np.concatenate(ref_chunks) if ref_chunks else np.array([], dtype=float)
         if syn_array.size == 0 or ref_array.size == 0:
             metrics[feature] = {
                 "w1": float("nan"),
                 "w1_ci": (float("nan"), float("nan")),
                 "ks_stat": float("nan"),
-                "ks_ci": (float("nan"), float("nan")),
                 "ks_pvalue": float("nan"),
             }
             continue
@@ -560,20 +585,11 @@ def compute_distribution_metrics(
         )
 
         ks_stat, ks_pvalue = ks_two_sample(syn_array, ref_array)
-        #TODO: the ks_ci here is not really required, remove it 
-        ks_ci = bootstrap_two_sample_ci(
-            syn_array,
-            ref_array,
-            n_boot,
-            None if seed is None else seed + idx * 4 + 1,
-            lambda a, b: ks_two_sample(a, b)[0],
-        )
 
         metrics[feature] = {
             "w1": w1,
             "w1_ci": w1_ci,
             "ks_stat": ks_stat,
-            "ks_ci": ks_ci,
             "ks_pvalue": ks_pvalue,
         }
     return metrics
@@ -640,7 +656,6 @@ def compute_scenario_metrics(
                         "delta_mean": float("nan"),
                         "delta_ci": (float("nan"), float("nan")),
                         "ks_stat": float("nan"),
-                        "ks_ci": (float("nan"), float("nan")),
                         "ks_pvalue": float("nan"),
                     }
                 )
@@ -657,20 +672,12 @@ def compute_scenario_metrics(
             )
 
             ks_stat, ks_pvalue = ks_two_sample(syn_arr, ref_arr)
-            ks_ci = bootstrap_two_sample_ci(
-                syn_arr,
-                ref_arr,
-                n_boot,
-                None if seed is None else seed + scen_idx * 64 + out_idx * 4 + 1,
-                lambda a, b: ks_two_sample(a, b)[0],
-            )
 
             entry.update(
                 {
                     "delta_mean": delta,
                     "delta_ci": delta_ci,
                     "ks_stat": ks_stat,
-                    "ks_ci": ks_ci,
                     "ks_pvalue": ks_pvalue,
                 }
             )
@@ -689,7 +696,9 @@ def kl_divergence(p: np.ndarray, q: np.ndarray) -> float:
 def compute_kl_metrics(
     synthetic_patients: List[Dict[str, Any]],
     reference_patients: List[Dict[str, Any]],
-) -> Dict[str, float]:
+    n_boot: int,
+    seed: Optional[int],
+) -> Dict[str, Any]:
     def joint_counts(patients: List[Dict[str, Any]]) -> np.ndarray:
         counts = np.zeros((len(TREATMENT_SCENARIOS), len(OUTCOME_LABELS)), dtype=float)
         for patient in patients:
@@ -706,15 +715,62 @@ def compute_kl_metrics(
             return counts
         return counts / counts.sum()
 
-    syn_joint = joint_counts(synthetic_patients)
-    ref_joint = joint_counts(reference_patients)
-    joint_kl = kl_divergence(syn_joint.flatten(), ref_joint.flatten()) if syn_joint.sum() and ref_joint.sum() else float("nan")
+    def compute_kl_pair(
+        syn_subset: Sequence[Dict[str, Any]],
+        ref_subset: Sequence[Dict[str, Any]],
+    ) -> tuple[float, float]:
+        syn_joint = joint_counts(list(syn_subset))
+        ref_joint = joint_counts(list(ref_subset))
+        joint_val = (
+            kl_divergence(syn_joint.flatten(), ref_joint.flatten())
+            if syn_joint.sum() and ref_joint.sum()
+            else float("nan")
+        )
+        syn_marginal = syn_joint.sum(axis=0)
+        ref_marginal = ref_joint.sum(axis=0)
+        marginal_val = (
+            kl_divergence(syn_marginal, ref_marginal)
+            if syn_marginal.sum() and ref_marginal.sum()
+            else float("nan")
+        )
+        return joint_val, marginal_val
 
-    syn_marginal = syn_joint.sum(axis=0)
-    ref_marginal = ref_joint.sum(axis=0)
-    marginal_kl = kl_divergence(syn_marginal, ref_marginal) if syn_marginal.sum() and ref_marginal.sum() else float("nan")
+    joint_kl, marginal_kl = compute_kl_pair(synthetic_patients, reference_patients)
 
-    return {"joint": joint_kl, "marginal_outcome": marginal_kl}
+    joint_ci: tuple[float, float] = (float("nan"), float("nan"))
+    marginal_ci: tuple[float, float] = (float("nan"), float("nan"))
+
+    if n_boot > 0 and synthetic_patients and reference_patients:
+        syn_count = len(synthetic_patients)
+        ref_count = len(reference_patients)
+        rng = np.random.default_rng(seed)
+        joint_samples = np.full(n_boot, float("nan"), dtype=float)
+        marginal_samples = np.full(n_boot, float("nan"), dtype=float)
+
+        for i in range(n_boot):
+            syn_indices = rng.integers(0, syn_count, size=syn_count)
+            ref_indices = rng.integers(0, ref_count, size=ref_count)
+            syn_subset = [synthetic_patients[idx] for idx in syn_indices]
+            ref_subset = [reference_patients[idx] for idx in ref_indices]
+            joint_val, marginal_val = compute_kl_pair(syn_subset, ref_subset)
+            joint_samples[i] = joint_val
+            marginal_samples[i] = marginal_val
+
+        joint_valid = joint_samples[np.isfinite(joint_samples)]
+        marginal_valid = marginal_samples[np.isfinite(marginal_samples)]
+        if joint_valid.size:
+            joint_low, joint_high = np.percentile(joint_valid, [2.5, 97.5])
+            joint_ci = (float(joint_low), float(joint_high))
+        if marginal_valid.size:
+            marginal_low, marginal_high = np.percentile(marginal_valid, [2.5, 97.5])
+            marginal_ci = (float(marginal_low), float(marginal_high))
+
+    return {
+        "joint": joint_kl,
+        "joint_ci": joint_ci,
+        "marginal_outcome": marginal_kl,
+        "marginal_outcome_ci": marginal_ci,
+    }
 
 
 def bootstrap_mean(values: np.ndarray, n_boot: int, seed: Optional[int]) -> tuple[float, tuple[float, float], float, float]:
@@ -784,12 +840,11 @@ def generate_report(summary: Dict[str, Any]) -> str:
         p_val = stats.get("ks_pvalue")
         p_str = f"{p_val:.3e}" if p_val is not None and np.isfinite(p_val) else "nan"
         lines.append(
-            "  {feature}: W1={w1} CI={w1_ci}, KS={ks} CI={ks_ci}, p={p}".format(
+            "  {feature}: W1={w1} CI={w1_ci}, KS={ks}, p={p}".format(
                 feature=feature,
                 w1=_format_float(stats.get("w1")),
                 w1_ci=_format_ci(stats.get("w1_ci")),
                 ks=_format_float(stats.get("ks_stat")),
-                ks_ci=_format_ci(stats.get("ks_ci")),
                 p=p_str,
             )
         )
@@ -816,12 +871,11 @@ def generate_report(summary: Dict[str, Any]) -> str:
                 else ""
             )
             lines.append(
-                "    {label}: |Δ|={delta} CI={delta_ci}, KS={ks} CI={ks_ci}, p={p}{sizes}".format(
+                "    {label}: |Δ|={delta} CI={delta_ci}, KS={ks}, p={p}{sizes}".format(
                     label=label,
                     delta=_format_float(stats.get("delta_mean")),
                     delta_ci=_format_ci(stats.get("delta_ci")),
                     ks=_format_float(stats.get("ks_stat")),
-                    ks_ci=_format_ci(stats.get("ks_ci")),
                     p=p_str,
                     sizes=size_str,
                 )
@@ -848,22 +902,24 @@ def generate_report(summary: Dict[str, Any]) -> str:
                     else ""
                 )
                 lines.append(
-                    "    {label}: |Δ|={delta} CI={delta_ci}, KS={ks} CI={ks_ci}, p={p}{sizes}".format(
+                    "    {label}: |Δ|={delta} CI={delta_ci}, KS={ks}, p={p}{sizes}".format(
                         label=label,
                         delta=_format_float(stats.get("delta_mean")),
                         delta_ci=_format_ci(stats.get("delta_ci")),
                         ks=_format_float(stats.get("ks_stat")),
-                        ks_ci=_format_ci(stats.get("ks_ci")),
                         p=p_str,
                         sizes=size_str,
                     )
                 )
 
     lines.append("")
+    kl_stats = summary["kl_metrics"]
     lines.append(
-        "KL divergence: joint={joint:.4f}, marginal_outcome={marginal:.4f}".format(
-            joint=summary["kl_metrics"]["joint"],
-            marginal=summary["kl_metrics"]["marginal_outcome"],
+        "KL divergence: joint={joint} CI={joint_ci}, marginal_outcome={marginal} CI={marg_ci}".format(
+            joint=_format_float(kl_stats.get("joint")),
+            joint_ci=_format_ci(kl_stats.get("joint_ci")),
+            marginal=_format_float(kl_stats.get("marginal_outcome")),
+            marg_ci=_format_ci(kl_stats.get("marginal_outcome_ci")),
         )
     )
 
@@ -875,15 +931,35 @@ def generate_report(summary: Dict[str, Any]) -> str:
             f"width={stats['ci_width_percent']:.1f}% SE={stats['se']:.4f} N={stats['sample_size']}"
         )
 
-    return "\n".join(lines)
+    natural_metrics = summary.get("natural_experiments") or {}
+    if natural_metrics:
+        lines.append("")
+        lines.append("Natural experiment outcome alignment (|Δmean|, KS p-value) for outcome labels:")
+        for scenario, scenario_stats in natural_metrics.items():
+            lines.append(f"  {scenario}:")
+            for outcome_label in OUTCOME_LABELS:  # ["DOD", "NED", "AWD"]
+                stats = scenario_stats.get(outcome_label, {})
+                p_val = stats.get("ks_pvalue")
+                p_str = f"{p_val:.3e}" if p_val is not None and np.isfinite(p_val) else "nan"
+                sizes = stats.get("sample_sizes", {})
+                n_syn = sizes.get("synthetic", 0)
+                n_ref = sizes.get("reference", 0)
+                lines.append(
+                    "    {label}: |Δ|={delta} CI={ci}, KS={ks}, p={p} N_syn={n_syn} N_ref={n_ref}".format(
+                        label=outcome_label,
+                        delta=_format_float(stats.get("delta_mean")),
+                        ci=_format_ci(stats.get("delta_ci")),
+                        ks=_format_float(stats.get("ks_stat")),
+                        p=p_str,
+                        n_syn=n_syn,
+                        n_ref=n_ref,
+                    )
+                )
 
-#TODO: influence function is missing, check from the original script and integrate (check the name of implementatioj, mayb it is)
+    return "\n".join(lines)
 
 def main(argv: Optional[List[str]] = None) -> None:
     args = build_arg_parser().parse_args(argv)
-
-    if bool(args.counterfactual) ^ bool(args.reference):
-        raise ValueError("Both --counterfactual and --reference must be provided together.")
 
     # retrieve model
     cfg, metadata, generator, validation_ids, device = load_checkpoint_bundle(args.checkpoint)
@@ -896,8 +972,6 @@ def main(argv: Optional[List[str]] = None) -> None:
     dataset_status_labels: List[str] = []
     dataset_endpoint_labels: List[str] = []
 
-    #TODO: make sure here it inference the data points correctly
-    #TODO: remove the option for counteractuals 
     dataset_payload = load_dataset_payload(args.dataset)
     dataset = SyntheticSequenceDataset(
         dataset_payload,
@@ -908,7 +982,6 @@ def main(argv: Optional[List[str]] = None) -> None:
     dataset_status_labels = list(dataset.treat_categories.get("status_at_last_follow_up", OUTCOME_LABELS))
     dataset_endpoint_labels = list(dataset.treat_categories.get("treatment_endpoint_category", []))
     
-    #TODO: make sure the patients are subjected to both the same treatment for counterfactual and real 
     cf_patients = build_counterfactual_patients(
         dataset,
         generator,
@@ -919,6 +992,28 @@ def main(argv: Optional[List[str]] = None) -> None:
         samples_per_patient=max(1, args.samples),
     )
     ref_patients = filter_patients(dataset_payload["patients"], validation_ids)
+
+    actual_scenarios: Dict[str, str] = {}
+    aligned_ref_patients: List[Dict[str, Any]] = []
+    for patient in ref_patients:
+        scenario = scenario_label(final_record(patient.get("actual_treatment", [])))
+        if scenario not in TREATMENT_SCENARIOS:
+            continue
+        patient_id = str(patient.get("patient_id"))
+        actual_scenarios[patient_id] = scenario
+        aligned_ref_patients.append(patient)
+    ref_patients = aligned_ref_patients
+
+    aligned_cf_patients: List[Dict[str, Any]] = []
+    for patient in cf_patients:
+        patient_id = str(patient.get("patient_id"))
+        scenario = patient.get("scenario")
+        if scenario not in TREATMENT_SCENARIOS:
+            continue
+        if actual_scenarios.get(patient_id) != scenario:
+            continue
+        aligned_cf_patients.append(patient)
+    cf_patients = aligned_cf_patients
 
     status_labels = sorted(
         set(dataset_status_labels or OUTCOME_LABELS)
@@ -933,6 +1028,8 @@ def main(argv: Optional[List[str]] = None) -> None:
 
     ensure_probability_metadata(cf_patients, status_labels, endpoint_labels)
     ensure_probability_metadata(ref_patients, status_labels, endpoint_labels)
+
+    natural_match_cols = args.natural_match_cols or []
 
     summary: Dict[str, Any] = {
         "counts": {
@@ -965,11 +1062,23 @@ def main(argv: Optional[List[str]] = None) -> None:
                 seed_value,
             ) if endpoint_labels else {},
         },
-        #TODO: check if also in KL bootstrapping is applied
-        #TODO: check if the original fucntions are the same as this one
-        "kl_metrics": compute_kl_metrics(cf_patients, ref_patients),
+        "kl_metrics": compute_kl_metrics(
+            cf_patients,
+            ref_patients,
+            args.bootstrap,
+            seed_value,
+        ),
         "scenario_risks": compute_scenario_risks(
             cf_patients, args.risk_feature, args.bootstrap, seed_value
+        ),
+        "natural_experiments": compute_scenario_metrics(
+            cf_patients,
+            ref_patients,
+            OUTCOME_LABELS, 
+            "status_probabilities",
+            "status_at_last_follow_up",
+            args.bootstrap,
+            seed_value,
         ),
     }
 
