@@ -95,6 +95,15 @@ PROBABILITY_ONLY_FEATURES = {
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
+    '''
+    Build command line parser for validation CLI.
+
+    args:
+    - None
+
+    return:
+    - parser: configured argument parser [argparse.ArgumentParser]
+    '''
     parser = argparse.ArgumentParser(
         description="Validate synthetic counterfactual trajectories against clinical.4"
     )
@@ -141,6 +150,15 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
 
 def load_dataset_payload(path: str | Path) -> Dict[str, Any]:
+    '''
+    Load dataset JSON payload and verify structure.
+
+    args:
+    - path: dataset JSON path [str | Path]
+
+    return:
+    - payload: parsed dataset dictionary [Dict[str, Any]]
+    '''
     with open(path, "r", encoding="utf-8") as fh:
         payload = json.load(fh)
     if not isinstance(payload, dict) or "patients" not in payload:
@@ -149,6 +167,15 @@ def load_dataset_payload(path: str | Path) -> Dict[str, Any]:
 
 
 def load_dataset(path: str | Path) -> List[Dict[str, Any]]:
+    '''
+    Extract patient list from dataset payload.
+
+    args:
+    - path: dataset JSON path [str | Path]
+
+    return:
+    - patients: list of patient records [List[Dict[str, Any]]]
+    '''
     payload = load_dataset_payload(path)
     patients = payload.get("patients", [])
     if not isinstance(patients, list):
@@ -157,18 +184,48 @@ def load_dataset(path: str | Path) -> List[Dict[str, Any]]:
 
 
 def filter_patients(patients: List[Dict[str, Any]], keep_ids: Optional[set[str]]) -> List[Dict[str, Any]]:
+    '''
+    Filter patients by requested identifiers.
+
+    args:
+    - patients: collection of patient dicts [List[Dict[str, Any]]]
+    - keep_ids: identifiers to retain [Optional[set[str]]]
+
+    return:
+    - filtered: filtered patient records [List[Dict[str, Any]]]
+    '''
     if keep_ids is None:
         return patients
     keep_ids = {str(pid) for pid in keep_ids}
     return [patient for patient in patients if str(patient.get("patient_id")) in keep_ids]
 
 def _format_float(value: float, precision: int = 4) -> str:
+    '''
+    Render numeric value with consistent precision.
+
+    args:
+    - value: numeric input to format [float]
+    - precision: decimal places to include [int]
+
+    return:
+    - text: formatted representation [str]
+    '''
     if value is None or not np.isfinite(value):
         return "nan"
     return f"{value:.{precision}f}"
 
 
 def _format_ci(ci: Optional[Tuple[float, float]], precision: int = 4) -> str:
+    '''
+    Format confidence interval values for display.
+
+    args:
+    - ci: low and high bounds tuple [Optional[Tuple[float, float]]]
+    - precision: decimal places to include [int]
+
+    return:
+    - text: formatted bounds string [str]
+    '''
     if not ci:
         return "[nan, nan]"
     low, high = ci
@@ -180,6 +237,15 @@ def _format_ci(ci: Optional[Tuple[float, float]], precision: int = 4) -> str:
 
 
 def extract_validation_ids(metadata: Dict[str, Any]) -> Optional[set[str]]:
+    '''
+    Pull validation patient identifiers from metadata.
+
+    args:
+    - metadata: checkpoint metadata dictionary [Dict[str, Any]]
+
+    return:
+    - ids: normalized identifier set [Optional[set[str]]]
+    '''
     ids = metadata.get("validation_patient_ids") if metadata else None
     if not ids:
         return None
@@ -189,6 +255,15 @@ def extract_validation_ids(metadata: Dict[str, Any]) -> Optional[set[str]]:
 def load_checkpoint_bundle(
     checkpoint_path: str | Path,
 ) -> tuple[Config, Dict[str, Any], LSTMGenerator, Optional[set[str]], torch.device]:
+    '''
+    Load training checkpoint and rebuild generator bundle.
+
+    args:
+    - checkpoint_path: path to checkpoint file [str | Path]
+
+    return:
+    - bundle: config, metadata, generator, ids, device tuple [tuple[Config, Dict[str, Any], LSTMGenerator, Optional[set[str]], torch.device]]
+    '''
     ckpt = torch.load(checkpoint_path, map_location="cpu")
     cfg = Config(**ckpt["config"])
     metadata: Dict[str, Any] = ckpt.get("metadata") or {}
@@ -218,6 +293,22 @@ def build_counterfactual_patients(
     endpoint_labels: Optional[List[str]] = None,
     samples_per_patient: int = 32,
 ) -> List[Dict[str, Any]]:
+    '''
+    Generate counterfactual patient trajectories for each scenario.
+
+    args:
+    - dataset: dataset wrapper used for sampling [SyntheticSequenceDataset]
+    - generator: trained generator network [LSTMGenerator]
+    - device: computation device for sampling [torch.device]
+    - validation_ids: subset of patient identifiers to include [Optional[set[str]]]
+    - extra_ones: number of one-hot perturbations for conditioning [int]
+    - status_labels: optional outcome labels override [Optional[List[str]]]
+    - endpoint_labels: optional endpoint labels override [Optional[List[str]]]
+    - samples_per_patient: stochastic samples per patient [int]
+
+    return:
+    - patients: synthetic patient payloads [List[Dict[str, Any]]]
+    '''
     generator.eval()
 
     categorical_features = dataset.treat_categorical
@@ -415,6 +506,15 @@ def build_counterfactual_patients(
 
 
 def to_float(value: Any) -> Optional[float]:
+    '''
+    Convert arbitrary value into float when possible.
+
+    args:
+    - value: object to convert [Any]
+
+    return:
+    - numeric: parsed float or None [Optional[float]]
+    '''
     if value is None or value == "":
         return None
     try:
@@ -424,6 +524,15 @@ def to_float(value: Any) -> Optional[float]:
 
 
 def scenario_label(actual: Dict[str, Any]) -> Optional[str]:
+    '''
+    Map actual treatment flags to scenario label.
+
+    args:
+    - actual: conditioning record with episode flags [Dict[str, Any]]
+
+    return:
+    - label: scenario identifier [Optional[str]]
+    '''
     if not actual:
         return None
     surgery = bool(to_float(actual.get("episodes.surgery")) or 0)
@@ -439,11 +548,29 @@ def scenario_label(actual: Dict[str, Any]) -> Optional[str]:
 
 
 def final_record(records: Iterable[Dict[str, Any]]) -> Dict[str, Any]:
+    '''
+    Return final element from treatment record sequence.
+
+    args:
+    - records: iterable of treatment dictionaries [Iterable[Dict[str, Any]]]
+
+    return:
+    - record: last record or empty dict [Dict[str, Any]]
+    '''
     records = list(records)
     return records[-1] if records else {}
 
 
 def evaluate_constraints(patients: List[Dict[str, Any]]) -> Dict[str, Any]:
+    '''
+    Count hard constraint violations across generated treatments.
+
+    args:
+    - patients: synthetic patient payloads to analyse [List[Dict[str, Any]]]
+
+    return:
+    - summary: aggregate violation metrics [Dict[str, Any]]
+    '''
     violation_counts: Dict[str, int] = defaultdict(int)
     total_steps = 0
     invalid_steps = 0
@@ -483,11 +610,31 @@ def evaluate_constraints(patients: List[Dict[str, Any]]) -> Dict[str, Any]:
 
 
 def extract_feature(values: List[float]) -> np.ndarray:
+    '''
+    Convert list of numbers into finite numpy vector.
+
+    args:
+    - values: collected scalar measurements [List[float]]
+
+    return:
+    - array: finite numpy array of values [np.ndarray]
+    '''
     arr = np.array(values, dtype=float)
     return arr[np.isfinite(arr)]
 
 
 def iter_feature_values(patients: List[Dict[str, Any]], feature: str, section: str = "treatment") -> List[float]:
+    '''
+    Collect numeric feature values from patient records.
+
+    args:
+    - patients: sequence of patient dictionaries [List[Dict[str, Any]]]
+    - feature: feature key to extract [str]
+    - section: record section to traverse [str]
+
+    return:
+    - values: extracted feature values [List[float]]
+    '''
     values: List[float] = []
     for patient in patients:
         for record in patient.get(section, []):
@@ -498,6 +645,17 @@ def iter_feature_values(patients: List[Dict[str, Any]], feature: str, section: s
 
 
 def _wasserstein_distance_numpy(arr1: np.ndarray, arr2: np.ndarray, bins: int = 512) -> float:
+    '''
+    Approximate 1D Wasserstein distance via discretised CDFs.
+
+    args:
+    - arr1: first sample array [np.ndarray]
+    - arr2: second sample array [np.ndarray]
+    - bins: discretisation bins for integration [int]
+
+    return:
+    - distance: estimated Wasserstein distance [float]
+    '''
     if arr1.size == 0 or arr2.size == 0:
         return float("nan")
     min_v = min(arr1.min(), arr2.min())
@@ -511,6 +669,16 @@ def _wasserstein_distance_numpy(arr1: np.ndarray, arr2: np.ndarray, bins: int = 
 
 
 def _ks_2sample_numpy(arr1: np.ndarray, arr2: np.ndarray) -> tuple[float, float]:
+    '''
+    Compute Kolmogorov-Smirnov statistic without SciPy.
+
+    args:
+    - arr1: first sample array [np.ndarray]
+    - arr2: second sample array [np.ndarray]
+
+    return:
+    - result: KS statistic and p-value [tuple[float, float]]
+    '''
     if arr1.size == 0 or arr2.size == 0:
         return float("nan"), float("nan")
     data_all = np.concatenate([arr1, arr2])
@@ -531,6 +699,18 @@ def compute_distribution_metrics(
     n_boot: int,
     seed: Optional[int],
 ) -> Dict[str, Dict[str, float]]:
+    '''
+    Compare feature distributions between synthetic and reference cohorts.
+
+    args:
+    - synthetic_patients: generated patient records [List[Dict[str, Any]]]
+    - reference_patients: clinical patient records [List[Dict[str, Any]]]
+    - n_boot: bootstrap iterations for intervals [int]
+    - seed: optional RNG seed [Optional[int]]
+
+    return:
+    - metrics: distribution alignment statistics [Dict[str, Dict[str, float]]]
+    '''
     def collect_values(
         patients: List[Dict[str, Any]],
         feature: str,
@@ -601,6 +781,18 @@ def gather_scenario_samples(
     probability_key: str,
     field_name: str,
 ) -> Dict[str, Dict[str, np.ndarray]]:
+    '''
+    Aggregate scenario-specific outcome samples for metrics.
+
+    args:
+    - patients: patient records to examine [List[Dict[str, Any]]]
+    - labels: outcome labels of interest [List[str]]
+    - probability_key: key for stored probabilities [str]
+    - field_name: fallback deterministic field [str]
+
+    return:
+    - samples: scenario to label sample mapping [Dict[str, Dict[str, np.ndarray]]]
+    '''
     scenario_outcomes: Dict[str, Dict[str, List[float]]] = {
         scen: {label: [] for label in labels} for scen in TREATMENT_SCENARIOS
     }
@@ -636,6 +828,21 @@ def compute_scenario_metrics(
     n_boot: int,
     seed: Optional[int],
 ) -> Dict[str, Dict[str, Dict[str, Any]]]:
+    '''
+    Evaluate per-scenario outcome alignment metrics.
+
+    args:
+    - synthetic_patients: generated patient set [List[Dict[str, Any]]]
+    - reference_patients: observed patient set [List[Dict[str, Any]]]
+    - labels: outcome labels to score [List[str]]
+    - probability_key: key for probability metadata [str]
+    - field_name: deterministic fallback field [str]
+    - n_boot: bootstrap iterations for CIs [int]
+    - seed: optional RNG seed [Optional[int]]
+
+    return:
+    - metrics: nested scenario metrics dictionary [Dict[str, Dict[str, Dict[str, Any]]]]
+    '''
     syn_samples = gather_scenario_samples(synthetic_patients, labels, probability_key, field_name)
     ref_samples = gather_scenario_samples(reference_patients, labels, probability_key, field_name)
     results: Dict[str, Dict[str, Dict[str, Any]]] = {}
@@ -687,6 +894,16 @@ def compute_scenario_metrics(
 
 
 def kl_divergence(p: np.ndarray, q: np.ndarray) -> float:
+    '''
+    Compute KL divergence between two discrete distributions.
+
+    args:
+    - p: baseline probability mass [np.ndarray]
+    - q: comparison probability mass [np.ndarray]
+
+    return:
+    - value: KL divergence estimate [float]
+    '''
     eps = 1e-12
     p = p + eps
     q = q + eps
@@ -699,6 +916,18 @@ def compute_kl_metrics(
     n_boot: int,
     seed: Optional[int],
 ) -> Dict[str, Any]:
+    '''
+    Measure KL divergence between synthetic and reference joint outcomes.
+
+    args:
+    - synthetic_patients: generated patient records [List[Dict[str, Any]]]
+    - reference_patients: observed patient records [List[Dict[str, Any]]]
+    - n_boot: bootstrap iterations for confidence intervals [int]
+    - seed: optional RNG seed [Optional[int]]
+
+    return:
+    - metrics: joint and marginal KL statistics [Dict[str, Any]]
+    '''
     def joint_counts(patients: List[Dict[str, Any]]) -> np.ndarray:
         counts = np.zeros((len(TREATMENT_SCENARIOS), len(OUTCOME_LABELS)), dtype=float)
         for patient in patients:
@@ -786,6 +1015,17 @@ def compute_kl_metrics(
 
 
 def bootstrap_mean(values: np.ndarray, n_boot: int, seed: Optional[int]) -> tuple[float, tuple[float, float], float, float]:
+    '''
+    Estimate mean, confidence interval, width, and SE via bootstrap.
+
+    args:
+    - values: sample array to resample [np.ndarray]
+    - n_boot: bootstrap sample count [int]
+    - seed: optional RNG seed [Optional[int]]
+
+    return:
+    - stats: mean, CI, CI width %, and standard error [tuple[float, tuple[float, float], float, float]]
+    '''
     if values.size == 0:
         return float("nan"), (float("nan"), float("nan")), float("nan"), float("nan")
     rng = np.random.default_rng(seed)
@@ -807,6 +1047,18 @@ def compute_scenario_risks(
     n_boot: int,
     seed: Optional[int],
 ) -> Dict[str, Dict[str, float]]:
+    '''
+    Summarise scenario-specific risk estimates with bootstrap intervals.
+
+    args:
+    - patients: patient records contributing to risk [List[Dict[str, Any]]]
+    - feature: treatment outcome feature to analyse [str]
+    - n_boot: bootstrap iterations [int]
+    - seed: optional RNG seed [Optional[int]]
+
+    return:
+    - risks: per-scenario risk statistics [Dict[str, Dict[str, float]]]
+    '''
     results: Dict[str, Dict[str, float]] = {}
     for scenario in TREATMENT_SCENARIOS:
         values: List[float] = []
@@ -831,6 +1083,15 @@ def compute_scenario_risks(
 
 
 def generate_report(summary: Dict[str, Any]) -> str:
+    '''
+    Build human-readable validation summary report.
+
+    args:
+    - summary: aggregated validation outputs [Dict[str, Any]]
+
+    return:
+    - text: multi-line report string [str]
+    '''
     lines: List[str] = []
     constraints = summary["constraints"]
     lines.append("Hard constraint violations:")
@@ -971,6 +1232,15 @@ def generate_report(summary: Dict[str, Any]) -> str:
     return "\n".join(lines)
 
 def main(argv: Optional[List[str]] = None) -> None:
+    '''
+    Execute validation workflow from command line arguments.
+
+    args:
+    - argv: optional argument vector override [Optional[List[str]]]
+
+    return:
+    - None
+    '''
     args = build_arg_parser().parse_args(argv)
 
     # retrieve model

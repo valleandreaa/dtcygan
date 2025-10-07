@@ -22,6 +22,15 @@ from scipy.stats import ks_2samp, wasserstein_distance
 
 
 def load_dataset_payload(path: str | Path) -> Dict[str, Any]:
+    '''
+    Load dataset JSON payload and verify required keys.
+
+    args:
+    - path: dataset JSON path [str | Path]
+
+    return:
+    - payload: parsed dataset dictionary [Dict[str, Any]]
+    '''
     with open(path, "r", encoding="utf-8") as fh:
         payload = json.load(fh)
     if not isinstance(payload, dict) or "patients" not in payload:
@@ -30,6 +39,15 @@ def load_dataset_payload(path: str | Path) -> Dict[str, Any]:
 
 
 def load_dataset(path: str | Path) -> List[Dict[str, Any]]:
+    '''
+    Extract patient list from dataset payload.
+
+    args:
+    - path: dataset JSON path [str | Path]
+
+    return:
+    - patients: list of patient records [List[Dict[str, Any]]]
+    '''
     payload = load_dataset_payload(path)
     patients = payload.get("patients", [])
     if not isinstance(patients, list):
@@ -38,6 +56,16 @@ def load_dataset(path: str | Path) -> List[Dict[str, Any]]:
 
 
 def filter_patients(patients: List[Dict[str, Any]], keep_ids: Optional[set[str]]) -> List[Dict[str, Any]]:
+    '''
+    Filter patients by requested identifiers.
+
+    args:
+    - patients: collection of patient dicts [List[Dict[str, Any]]]
+    - keep_ids: identifiers to retain [Optional[set[str]]]
+
+    return:
+    - filtered: filtered patient records [List[Dict[str, Any]]]
+    '''
     if keep_ids is None:
         return patients
     keep_ids = {str(pid) for pid in keep_ids}
@@ -51,6 +79,19 @@ def bootstrap_two_sample_ci(
     seed: Optional[int],
     stat_fn: Callable[[np.ndarray, np.ndarray], float],
 ) -> Tuple[float, float]:
+    '''
+    Bootstrap confidence interval for a two-sample statistic.
+
+    args:
+    - arr1: first sample array [np.ndarray]
+    - arr2: second sample array [np.ndarray]
+    - n_boot: number of bootstrap resamples [int]
+    - seed: optional RNG seed [Optional[int]]
+    - stat_fn: statistic applied to sampled arrays [Callable[[np.ndarray, np.ndarray], float]]
+
+    return:
+    - ci: bootstrap confidence bounds [Tuple[float, float]]
+    '''
     arr1 = np.asarray(arr1)
     arr2 = np.asarray(arr2)
     if n_boot <= 0 or arr1.size == 0 or arr2.size == 0:
@@ -69,6 +110,16 @@ def bootstrap_two_sample_ci(
 
 
 def wasserstein_1d(arr1: np.ndarray, arr2: np.ndarray) -> float:
+    '''
+    Compute 1D Wasserstein distance using SciPy helper.
+
+    args:
+    - arr1: first sample array [np.ndarray]
+    - arr2: second sample array [np.ndarray]
+
+    return:
+    - distance: Wasserstein distance between samples [float]
+    '''
     arr1 = np.asarray(arr1)
     arr2 = np.asarray(arr2)
     if arr1.size == 0 or arr2.size == 0:
@@ -77,6 +128,16 @@ def wasserstein_1d(arr1: np.ndarray, arr2: np.ndarray) -> float:
 
 
 def ks_two_sample(arr1: np.ndarray, arr2: np.ndarray) -> tuple[float, float]:
+    '''
+    Compute Kolmogorov-Smirnov statistic and p-value.
+
+    args:
+    - arr1: first sample array [np.ndarray]
+    - arr2: second sample array [np.ndarray]
+
+    return:
+    - result: KS statistic and p-value [tuple[float, float]]
+    '''
     arr1 = np.asarray(arr1)
     arr2 = np.asarray(arr2)
     if arr1.size == 0 or arr2.size == 0:
@@ -90,6 +151,17 @@ def collect_labels_from_patients(
     field_name: str,
     prob_key: str,
 ) -> List[str]:
+    '''
+    Discover observed labels from patient records and probability maps.
+
+    args:
+    - patients: patient dictionaries to inspect [List[Dict[str, Any]]]
+    - field_name: treatment field storing observed label [str]
+    - prob_key: key with probability metadata [str]
+
+    return:
+    - labels: sorted unique label list [List[str]]
+    '''
     labels: set[str] = set()
     for patient in patients:
         probs = patient.get(prob_key)
@@ -104,6 +176,15 @@ def collect_labels_from_patients(
 
 
 def normalize_probability_dict(values: Dict[str, float]) -> Dict[str, float]:
+    '''
+    Renormalise dictionary values to form a probability distribution.
+
+    args:
+    - values: mapping from label to weight [Dict[str, float]]
+
+    return:
+    - normalized: probability dictionary [Dict[str, float]]
+    '''
     total = float(sum(values.values()))
     if total <= 0:
         return {k: 0.0 for k in values}
@@ -115,6 +196,17 @@ def ensure_probability_metadata(
     status_labels: Sequence[str],
     endpoint_labels: Sequence[str],
 ) -> None:
+    '''
+    Populate probability metadata for status and endpoints on patients.
+
+    args:
+    - patients: patient dictionaries to patch [List[Dict[str, Any]]]
+    - status_labels: expected status labels [Sequence[str]]
+    - endpoint_labels: expected endpoint labels [Sequence[str]]
+
+    return:
+    - None
+    '''
     status_set = [str(label) for label in status_labels]
     endpoint_set = [str(label) for label in endpoint_labels]
 
@@ -144,6 +236,15 @@ def ensure_probability_metadata(
 
 
 def final_record(records: Iterable[Dict[str, Any]]) -> Dict[str, Any]:
+    '''
+    Return final element from record iterable.
+
+    args:
+    - records: iterable of dictionaries [Iterable[Dict[str, Any]]]
+
+    return:
+    - record: last dictionary or empty dict [Dict[str, Any]]
+    '''
     records = list(records)
     return records[-1] if records else {}
 
@@ -155,6 +256,19 @@ def decode_treatment_value(
     categorical_map: Dict[str, List[str]],
     ordinal_lookup: Dict[str, List[Tuple[float, str]]],
 ) -> Any:
+    '''
+    Decode generator outputs into human-readable treatment values.
+
+    args:
+    - feature: treatment feature name [str]
+    - raw: raw generator value [float]
+    - categorical_features: set of categorical features [set[str]]
+    - categorical_map: mapping to category labels [Dict[str, List[str]]]
+    - ordinal_lookup: lookup for ordinal decoding [Dict[str, List[Tuple[float, str]]]]
+
+    return:
+    - value: decoded feature value [Any]
+    '''
     if feature in categorical_features:
         categories = categorical_map.get(feature, [])
         if categories:
@@ -174,6 +288,16 @@ def load_checkpoint_bundle(
     checkpoint_path: str | Path,
     desired_device: Optional[str] = None,
 ) -> tuple[Config, Dict[str, Any], LSTMGenerator, Optional[set[str]], torch.device]:
+    '''
+    Load checkpoint bundle and prepare generator on target device.
+
+    args:
+    - checkpoint_path: path to checkpoint file [str | Path]
+    - desired_device: optional override for device resolution [Optional[str]]
+
+    return:
+    - bundle: config, metadata, generator, ids, device tuple [tuple[Config, Dict[str, Any], LSTMGenerator, Optional[set[str]], torch.device]]
+    '''
     ckpt = torch.load(checkpoint_path, map_location="cpu")
     cfg = Config(**ckpt["config"])
     metadata: Dict[str, Any] = ckpt.get("metadata") or {}
@@ -205,6 +329,22 @@ def build_counterfactual_patients(
     endpoint_labels: Optional[List[str]] = None,
     samples_per_patient: int = 32,
 ) -> List[Dict[str, Any]]:
+    '''
+    Generate counterfactual patient trajectories with probability metadata.
+
+    args:
+    - dataset: dataset wrapper used for sampling [SyntheticSequenceDataset]
+    - generator: trained generator network [LSTMGenerator]
+    - device: computation device for inference [torch.device]
+    - validation_ids: subset of patient identifiers to include [Optional[set[str]]]
+    - extra_ones: random one-hot augmentation count [int]
+    - status_labels: optional override for status labels [Optional[List[str]]]
+    - endpoint_labels: optional override for endpoint labels [Optional[List[str]]]
+    - samples_per_patient: stochastic samples per patient [int]
+
+    return:
+    - patients: synthetic patient payloads [List[Dict[str, Any]]]
+    '''
     results: List[Dict[str, Any]] = []
     generator.eval()
 
@@ -358,6 +498,20 @@ def patients_to_dataframe(
     include_timesteps: bool = True,
     include_probabilities: bool = True,
 ) -> pd.DataFrame:
+    '''
+    Convert patient payloads into a tabular dataframe view.
+
+    args:
+    - patients: patient dictionaries to flatten [List[Dict[str, Any]]]
+    - status_labels: status labels for probability columns [Sequence[str]]
+    - endpoint_labels: endpoint labels for probability columns [Sequence[str]]
+    - timestep_key: key storing timestep index [str]
+    - include_timesteps: whether to retain per-step rows [bool]
+    - include_probabilities: whether to expand probability fields [bool]
+
+    return:
+    - frame: pandas dataframe of patient data [pd.DataFrame]
+    '''
     rows: List[Dict[str, Any]] = []
 
     for patient in patients:
@@ -435,6 +589,18 @@ def _probability_columns(
     status_probs: Dict[str, float],
     endpoint_probs: Dict[str, float],
 ) -> Dict[str, float]:
+    '''
+    Build probability column mapping for dataframe export.
+
+    args:
+    - status_labels: ordered status labels [Sequence[str]]
+    - endpoint_labels: ordered endpoint labels [Sequence[str]]
+    - status_probs: status probability map [Dict[str, float]]
+    - endpoint_probs: endpoint probability map [Dict[str, float]]
+
+    return:
+    - columns: flattened probability columns [Dict[str, float]]
+    '''
     out: Dict[str, float] = {}
     for label in status_labels:
         prob = float(status_probs.get(label, 0.0))
