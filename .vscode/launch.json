@@ -68,8 +68,7 @@
             "args": [
                 "--checkpoint", "${workspaceFolder}/data/models/dtcygan_20250928_135339.pt",
                 "--dataset", "${workspaceFolder}/data/syntects.json",
-                "--samples", "32",
-                "--image-dir", "${workspaceFolder}/imgs/analysis"
+                "--output", "${workspaceFolder}/imgs/analysis"
             ]
         },
         {
