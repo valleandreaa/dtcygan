@@ -582,6 +582,8 @@ def plot_endpoint_waterfall_fan_grid(
             v = vals_ep.to_numpy()
             lo, hi = np.nanpercentile(v, [1, 99])
             rng_val = max(abs(lo), abs(hi))
+            if not np.isfinite(rng_val) or rng_val == 0:
+                rng_val = 0.01
             ylims[ep] = (-rng_val, rng_val)
 
     for r, ep in enumerate(endpoints):
@@ -672,7 +674,7 @@ def compute_individualized_treatment_effects(
 
             per_patient = (
                 delta.groupby(patient_col)
-                .apply(_integrate)
+                .apply(_integrate, include_groups=False)
                 .to_frame(name="ite")
                 .reset_index()
             )
