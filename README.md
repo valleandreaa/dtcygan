@@ -58,3 +58,54 @@ python train.py \
 - `--checkpoint-dir` defaults to `data/models`; adjust if you want checkpoints elsewhere.
 
 Each epoch prints expanded loss diagnostics (generator/discriminator, cycle, identity, component adversarial terms). Checkpoint metadata records the feature spec so inference can apply identical preprocessing.
+
+## Run the analysis suite
+`analyze.py` rebuilds counterfactual trajectories from a checkpoint and produces CSV/PNG outputs (ITE tables, waterfall fans, three-endpoint trajectories, risk-averse summaries).
+
+Basic invocation (mirrors the launch configuration):
+
+```bash
+python analyze.py \
+  --dataset data/syntects.json \
+  --checkpoint data/models/dtcygan_20250928_135339.pt \
+  --output-dir imgs/analysis \
+  --bootstrap 200 \
+  --lambda-gmd 0.0
+```
+
+Key flags:
+
+- `--dataset`: path to the synthetic cohort JSON (from `generate_data.py`).
+- `--checkpoint`: generator checkpoint saved by `train.py`.
+- `--output-dir`: destination folder for tables/figures (created if missing).
+- `--bootstrap`: number of resamples for uncertainty bands; set `0` to disable.
+- `--lambda-gmd`: dispersion weight for risk-averse scoring.
+- `--seed`: override RNG seed used for counterfactual generation (defaults to the checkpoint seed).
+- `--skip-histology` / `--skip-grade`: disable subgroup reporting.
+- `--plot-config`: optional YAML overriding default plot styling; omit to use the builtin `src/config/analysis_plots.yaml`.
+
+Run the command from the project root (or export `PYTHONPATH=src`) so the `dtcygan` package resolves correctly.
+
+## Validate a checkpoint
+`validate.py` rebuilds counterfactual trajectories for a compact subset of patients and emits evaluation CSVs/plots (calibration, endpoint metrics, etc.).
+
+Typical usage:
+
+```bash
+python validate.py \
+  --dataset path/to/dataset.json \
+  --checkpoint path/to/checkpoint.pt \
+  --output-dir imgs/validation
+```
+
+Important options:
+
+- `--dataset`: dataset JSON aligned with the model feature specification.
+- `--checkpoint`: generator checkpoint to score.
+- `--output-dir`: directory for validation artifacts (created automatically).
+- `--patients`: how many patients to sample for counterfactual evaluation (default `25`).
+- `--timesteps`: sequence length used during validation (defaults to the training setting).
+- `--seed`: seed controlling patient sampling and bootstrap draws.
+- `--bootstrap`: number of resamples for confidence intervals (set `0` to skip).
+
+As with the other CLIs, execute it from the project root (or set `PYTHONPATH=src`) so Python can import the `dtcygan` package.
