@@ -24,7 +24,6 @@ from dtcygan.visualization import (
 from dtcygan.training import SyntheticSequenceDataset, set_seed
 from dtcygan.eval_utils import (
     load_dataset_payload,
-    collect_labels_from_patients,
     ensure_probability_metadata,
     load_checkpoint_bundle,
     patients_to_dataframe,
@@ -322,16 +321,12 @@ def _make_group_label(df: pd.DataFrame) -> pd.Series:
 
 def _build_time_to_probs_from_df(df: pd.DataFrame, endpoint_col: str, arm_label: str) -> Dict[int, np.ndarray]:
     sub = df[df["group"] == arm_label]
-    if sub.empty:
-        return {}
     cols = [TIMESTEP_COL, endpoint_col]
     if "patient_id" in sub.columns:
         cols.append("patient_id")
     sub = sub[cols].copy()
     sub[endpoint_col] = pd.to_numeric(sub[endpoint_col], errors="coerce").astype(float).clip(0.0, 1.0)
     sub = sub.dropna(subset=[endpoint_col, TIMESTEP_COL])
-    if sub.empty:
-        return {}
     if "patient_id" in sub.columns:
         agg = sub.groupby([TIMESTEP_COL, "patient_id"], as_index=False)[endpoint_col].mean()
         grouped = agg.groupby(TIMESTEP_COL)
@@ -351,24 +346,14 @@ def compare_two_arms_df(
     n_boot: int = 2000,
     paired: bool = True,
     seed: Optional[int] = 42,
-) -> Dict[str, Any]:
+) -> Optional[Dict[str, Any]]:
     df = df.copy()
     df["group"] = _make_group_label(df)
-    if endpoint_col not in df.columns:
-        fallback = {
-            LOCAL_RECURRENCE_COL: "LR_prob_norm_global",
-            METASTATIC_COL: "MET_prob_norm_global",
-            DEAD_OF_DISEASE: "DOD_prob_norm_global",
-        }.get(endpoint_col)
-        if fallback and fallback in df.columns:
-            endpoint_col = fallback
-        else:
-            raise ValueError(f"Missing endpoint column: {endpoint_col}")
 
     A = _build_time_to_probs_from_df(df, endpoint_col, arm_A)
     B = _build_time_to_probs_from_df(df, endpoint_col, arm_B)
     if not A or not B:
-        raise ValueError("Selected arms or endpoint have no data.")
+        return None
     return _compare_arms(A, B, lam_gmd=lam_gmd, n_boot=n_boot, seed=seed, paired=paired)
 
 
@@ -396,33 +381,30 @@ def risk_averse_comparison_grid(
         arms = ["Surgery + RT", "Surgery + CT", "Surgery + RT + CT"]
     rows: List[Dict[str, Any]] = []
     for ep in endpoints:
-        if ep not in df.columns and ep not in (LOCAL_RECURRENCE_COL, METASTATIC_COL, DEAD_OF_DISEASE):
-            continue
         for arm in arms:
-            try:
-                res = compare_two_arms_df(
-                    df,
-                    endpoint_col=ep,
-                    arm_A=baseline,
-                    arm_B=arm,
-                    lam_gmd=lam_gmd,
-                    n_boot=n_boot,
-                    paired=paired,
-                    seed=seed,
-                )
-                rows.append(
-                    {
-                        "endpoint": ep,
-                        "baseline": baseline,
-                        "arm": arm,
-                        "percent_change": res["percent_change"],
-                        "ci_low": float(res["CI95"][0]),
-                        "ci_high": float(res["CI95"][1]),
-                        "p_tilde": res["p~"],
-                    }
-                )
-            except Exception:
+            res = compare_two_arms_df(
+                df,
+                endpoint_col=ep,
+                arm_A=baseline,
+                arm_B=arm,
+                lam_gmd=lam_gmd,
+                n_boot=n_boot,
+                paired=paired,
+                seed=seed,
+            )
+            if not res:
                 continue
+            rows.append(
+                {
+                    "endpoint": ep,
+                    "baseline": baseline,
+                    "arm": arm,
+                    "percent_change": res["percent_change"],
+                    "ci_low": float(res["CI95"][0]),
+                    "ci_high": float(res["CI95"][1]),
+                    "p_tilde": res["p~"],
+                }
+            )
     return pd.DataFrame(rows)
 
 
@@ -434,8 +416,6 @@ def compute_category_distribution(
     label_column: str,
     patient_col: str = "patient_id",
 ) -> pd.DataFrame:
-    if column not in df.columns:
-        return pd.DataFrame()
     if patient_col in df.columns:
         counts = df.groupby(column)[patient_col].nunique()
     else:
@@ -452,8 +432,6 @@ def compute_category_distribution(
 
 
 def _iter_category_subsets(df: pd.DataFrame, column: str) -> List[Tuple[str, pd.DataFrame]]:
-    if column not in df.columns:
-        return []
     series = df[column]
     known = [val for val in series.dropna().unique()]
     known.sort(key=lambda x: str(x).lower())
@@ -478,7 +456,7 @@ def _analyze_subset(
     plot_config: Mapping[str, Any],
 ) -> None:
     if df.empty:
-        print(f"Skipping {prefix}={label}: no rows available.")
+        print(f"{prefix}={label}: no rows")
         return
 
     work = df.copy()
@@ -507,74 +485,65 @@ def _analyze_subset(
         group_col="group",
     )
     if ite_df.empty:
-        print(f"Skipping ITE export for {prefix}={label}: no valid trajectories.")
+        print(f"{prefix}={label}: no ITE rows")
     else:
         ite_path.parent.mkdir(parents=True, exist_ok=True)
         ite_df.to_csv(ite_path, index=False)
-        print(f"Saved ITE table for {prefix}={label} to {ite_path}")
-        try:
-            plot_endpoint_waterfall_fan_grid(
-                ite_df,
-                histology=label,
-                out_path=waterfall_path,
-                n_boot=bootstrap,
-                seed=seed,
-                config=plot_config.get("waterfall", {}),
-            )
-        except Exception as exc:  # pragma: no cover - plotting guard
-            print(f"Waterfall fan grid for {prefix}={label} skipped: {exc}")
-
-    try:
-        endpoint_specs = [
-            (
-                "Local Recurrence",
-                "LR_prob_norm_global" if "LR_prob_norm_global" in work.columns else endpoint_map["local_recurrence"],
-            ),
-            (
-                "Metastasis",
-                "MET_prob_norm_global" if "MET_prob_norm_global" in work.columns else endpoint_map["metastasis"],
-            ),
-            (
-                "DOD",
-                "DOD_prob_norm_global" if "DOD_prob_norm_global" in work.columns else endpoint_map["death_of_disease"],
-            ),
-        ]
-        trajectories_cfg = plot_config.get("trajectories", {})
-        plot_three_endpoint_trajectories_with_bands(
-            work,
-            endpoints=endpoint_specs,
+        print(f"{prefix}={label}: wrote {ite_path}")
+        plot_endpoint_waterfall_fan_grid(
+            ite_df,
             histology=label,
-            out_path=trajectories_path,
+            out_path=waterfall_path,
             n_boot=bootstrap,
             seed=seed,
-            groups=DEFAULT_TREATMENT_GROUPS,
-            time_col=TIMESTEP_COL,
-            patient_col="patient_id",
-            group_col="group",
-            histology_col=HISTOLOGICAL_DIAGNOSIS_COL if HISTOLOGICAL_DIAGNOSIS_COL in work.columns else None,
-            agg=trajectories_cfg.get("agg", "median"),
-            band_method=trajectories_cfg.get("band_method", "rcqe"),
-            config=trajectories_cfg,
+            config=plot_config.get("waterfall", {}),
         )
-    except Exception as exc:  # pragma: no cover - plotting guard
-        print(f"Trajectories plot for {prefix}={label} skipped: {exc}")
 
-    try:
-        grid = risk_averse_comparison_grid(
-            work,
-            lam_gmd=lam_gmd,
-            n_boot=bootstrap,
-            paired=True,
-            seed=seed,
-            baseline="Surgery only",
-        )
-        if grid.empty:
-            print(f"Risk-averse comparison for {prefix}={label} produced no rows.")
-        else:
-            grid.to_csv(risk_path, index=False)
-            print(f"Saved risk-averse comparison for {prefix}={label} to {risk_path}")
-    except Exception as exc:  # pragma: no cover - robustness
-        print(f"Risk-averse comparison for {prefix}={label} skipped: {exc}")
+    endpoint_specs = [
+        (
+            "Local Recurrence",
+            "LR_prob_norm_global" if "LR_prob_norm_global" in work.columns else endpoint_map["local_recurrence"],
+        ),
+        (
+            "Metastasis",
+            "MET_prob_norm_global" if "MET_prob_norm_global" in work.columns else endpoint_map["metastasis"],
+        ),
+        (
+            "DOD",
+            "DOD_prob_norm_global" if "DOD_prob_norm_global" in work.columns else endpoint_map["death_of_disease"],
+        ),
+    ]
+    trajectories_cfg = plot_config.get("trajectories", {})
+    plot_three_endpoint_trajectories_with_bands(
+        work,
+        endpoints=endpoint_specs,
+        histology=label,
+        out_path=trajectories_path,
+        n_boot=bootstrap,
+        seed=seed,
+        groups=DEFAULT_TREATMENT_GROUPS,
+        time_col=TIMESTEP_COL,
+        patient_col="patient_id",
+        group_col="group",
+        histology_col=HISTOLOGICAL_DIAGNOSIS_COL if HISTOLOGICAL_DIAGNOSIS_COL in work.columns else None,
+        agg=trajectories_cfg.get("agg", "median"),
+        band_method=trajectories_cfg.get("band_method", "rcqe"),
+        config=trajectories_cfg,
+    )
+
+    grid = risk_averse_comparison_grid(
+        work,
+        lam_gmd=lam_gmd,
+        n_boot=bootstrap,
+        paired=True,
+        seed=seed,
+        baseline="Surgery only",
+    )
+    if grid.empty:
+        print(f"{prefix}={label}: no risk grid")
+    else:
+        grid.to_csv(risk_path, index=False)
+        print(f"{prefix}={label}: wrote {risk_path}")
 
 
 def run_category_analysis(
@@ -696,14 +665,8 @@ def generate_counterfactual_dataframe(
         samples_per_patient=1,
     )
 
-    status_labels = sorted(
-        set(status_labels)
-        | set(collect_labels_from_patients(cf_patients, "status_at_last_follow_up", "status_probabilities"))
-    )
-    endpoint_labels = sorted(
-        set(endpoint_labels)
-        | set(collect_labels_from_patients(cf_patients, "treatment_endpoint_category", "endpoint_probabilities"))
-    )
+    status_labels = sorted(status_labels)
+    endpoint_labels = sorted(endpoint_labels)
 
     ensure_probability_metadata(cf_patients, status_labels, endpoint_labels)
 

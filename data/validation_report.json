@@ -350,15 +350,15 @@
     }
   },
   "kl_metrics": {
-    "joint": NaN,
+    "joint": 0.8099730804375609,
     "joint_ci": [
-      NaN,
-      NaN
+      0.7243002324827995,
+      1.7495601361442688
     ],
-    "marginal_outcome": NaN,
+    "marginal_outcome": 0.5514094033426677,
     "marginal_outcome_ci": [
-      NaN,
-      NaN
+      0.3905031018076698,
+      1.7548006823167601
     ]
   },
   "scenario_risks": {

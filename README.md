@@ -11,14 +11,7 @@ DTCyGAN is a dynamic treatment counterfactual generator tailored to longitudinal
 
 ### Individualized Treatment Effects
 
-Following dynamic individualized treatment effect (ITE) formulations for time‑series health data, DTCyGAN computes patient‑level effects across multiple arms learned during training. For patient $i$, endpoint $e$, horizon $t$, and treatment arms $s$ and reference $r$:
-
-$$
-\Delta_{i,e,t}(s,\mathrm{vs},r) = \hat{p}^{(s)}*{i,e,t} - \hat{p}^{(r)}*{i,e,t},\qquad
-B_{i,e,t}(s,\mathrm{vs},r) = \Delta_{i,e,t}(s,\mathrm{vs},r).
-$$
-
-A reduction in adverse‑event risk relative to the reference yields a positive effect. Over discrete horizons $\mathcal{T}$, an optional time‑aggregated ITE can be reported via the trapezoidal rule. All quantities are computed per patient and per arm.
+We compute patient‑level effects across multiple treatment arms learned during training. For each patient and time horizon, we compare predicted outcome probabilities under a candidate arm versus a reference arm and report the difference as the individualized treatment effect (positive means lower adverse‑event risk than the reference). Optionally, we summarize effects over time using trapezoidal aggregation. All metrics are computed per‑patient and per‑arm.
 
 ### Validation Strategy
 
@@ -27,23 +20,12 @@ Evaluating counterfactual generators is difficult because alternative trajectori
 #### Empirical Consistency Checks
 
 1. **Physiological and protocol feasibility.** Generated sequences are screened for violations of physiological limits (e.g., negative tumor volume, hematological parameters outside viable ranges) and dosing schedules that contradict sarcoma guidelines. The proportion of failing sequences establishes a hard plausibility bound.
-2. **Natural experiments.** When observational data include patients who received an alternative therapy $\tilde{\mathbf{T}}$, their outcomes are compared with counterfactual predictions for matched patients on $\mathbf{T}$. Wasserstein‑1 distance and two‑sample Kolmogorov–Smirnov $p$‑values quantify concordance.
-3. **Marginal distribution alignment.** Kullback–Leibler divergence is measured between DTCyGAN’s synthetic scenarios $(\tilde{\mathbf{T}},\tilde{\mathbf{Y}})$ and the empirical distribution of $(\mathbf{T},\mathbf{Y})$. Large shifts flag calibration issues even when individual trajectories appear realistic.
+2. **Natural experiments.** When the data include patients who actually received an alternative therapy, we compare their outcomes with counterfactual predictions for matched patients who received the original therapy. Wasserstein‑1 distance and two‑sample Kolmogorov–Smirnov p‑values quantify concordance.
+3. **Marginal distribution alignment.** We measure Kullback–Leibler divergence between synthetic treatment–outcome pairs and the observed treatment–outcome pairs. Large shifts flag calibration issues even when individual trajectories appear realistic.
 
 #### Influence‑Function Risk Estimation
 
-Empirical checks alone lack a unified scalar score and can fail when alternative treatment arms are sparse. Influence‑function (IF) validation addresses this by linearizing the risk around the empirical distribution $\hat{P}_{n}$:
-
-$$
-\hat{R}*{n}(\theta) = \frac{1}{n}\sum*{i=1}^{n} \ell(\theta; z_{i}),\qquad
-\hat{R}^{\mathrm{IF}}*{n}(\theta) = \hat{R}*{n}(\theta) + \frac{1}{n}\sum_{i=1}^{n} \psi_{\theta}(z_{i}),
-$$
-with influence term
-$$
-\psi_{\theta}(z) = \mathbb{E}*{\hat{P}*{n}}\big[\nabla_{z},\ell(\theta; z)\big]^{\top},(z - \hat{\mu}).
-$$
-
-Under mild regularity conditions, $\hat{R}^{\mathrm{IF}}*{n}$ is $\sqrt{n}$‑consistent for the true counterfactual risk while requiring no unobserved outcomes. Reported metrics include $\hat{R}^{\mathrm{IF}}*{n}$ with nonparametric bootstrap 95% confidence intervals.
+Empirical checks alone lack a unified scalar score and can fail when alternative arms are sparse. We therefore report an influence‑function–based risk estimate that adjusts the empirical risk with a first‑order correction derived from each training point’s sensitivity. Under mild assumptions, this estimate is consistent for the true counterfactual risk while requiring no unobserved outcomes. We summarize the score with nonparametric bootstrap 95% confidence intervals.
 
 ## Getting Started
 

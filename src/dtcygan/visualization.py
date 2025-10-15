@@ -44,13 +44,9 @@ def _default_plot_config() -> Dict[str, Any]:
 
 
 def _read_plot_config(path: Path) -> Dict[str, Any]:
-    if not path.is_file():
-        return {}
     with open(path, "r", encoding="utf-8") as fh:
         data = yaml.safe_load(fh) or {}
-    if not isinstance(data, dict):
-        return {}
-    return data
+    return dict(data)
 
 
 def _prepare_waterfall_base(ite_df: pd.DataFrame, patient_col: str) -> pd.DataFrame:
@@ -689,8 +685,7 @@ def plot_three_endpoint_trajectories_with_bands(
         fig_width = max(16.0, min(24.0, 4.5 + 0.35 * max(1, n_steps)))
         fig_height = 5.0
         fig, axes = plt.subplots(1, len(endpoints), figsize=(fig_width, fig_height), sharey=True)
-        if not isinstance(axes, np.ndarray):
-            axes = np.array([axes])
+    axes = np.atleast_1d(axes)
 
     plt.rcParams.update(
         {
