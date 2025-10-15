@@ -184,15 +184,6 @@ def load_and_prepare(source: str | Path | pd.DataFrame) -> pd.DataFrame:
     df["group"] = _make_group_label(df)
     return df
 
-
-def _resolve_out_path(out_path: str | Path, default_dir: str | Path = DEFAULT_IMG_DIR) -> Path:
-    target = Path(out_path)
-    if target.parent == Path("") or str(target.parent) in {"", "."}:
-        target = Path(default_dir) / target
-    target.parent.mkdir(parents=True, exist_ok=True)
-    return target
-
-
 def _gmd_norm(values: np.ndarray) -> float:
     x = np.sort(np.asarray(values, dtype=float))
     n = x.size
@@ -318,22 +309,23 @@ def _make_group_label(df: pd.DataFrame) -> pd.Series:
     return np.select(conditions, choices, default="Other")
 
 
-
 def _build_time_to_probs_from_df(df: pd.DataFrame, endpoint_col: str, arm_label: str) -> Dict[int, np.ndarray]:
     sub = df[df["group"] == arm_label]
     cols = [TIMESTEP_COL, endpoint_col]
-    if "patient_id" in sub.columns:
+    has_patient = "patient_id" in sub.columns
+    if has_patient:
         cols.append("patient_id")
     sub = sub[cols].copy()
     sub[endpoint_col] = pd.to_numeric(sub[endpoint_col], errors="coerce").astype(float).clip(0.0, 1.0)
     sub = sub.dropna(subset=[endpoint_col, TIMESTEP_COL])
-    if "patient_id" in sub.columns:
-        agg = sub.groupby([TIMESTEP_COL, "patient_id"], as_index=False)[endpoint_col].mean()
-        grouped = agg.groupby(TIMESTEP_COL)
-    else:
-        grouped = sub.groupby(TIMESTEP_COL)
-    return {int(t): g[endpoint_col].to_numpy(dtype=float) for t, g in grouped}
-
+    if sub.empty:
+        return {}
+    group_cols = [TIMESTEP_COL] + (["patient_id"] if has_patient else [])
+    grouped = sub.groupby(group_cols)[endpoint_col].mean().reset_index()
+    return {
+        int(timestep): group[endpoint_col].to_numpy(dtype=float)
+        for timestep, group in grouped.groupby(TIMESTEP_COL)
+    }
 
 
 def compare_two_arms_df(
@@ -357,7 +349,6 @@ def compare_two_arms_df(
     return _compare_arms(A, B, lam_gmd=lam_gmd, n_boot=n_boot, seed=seed, paired=paired)
 
 
-
 def risk_averse_comparison_grid(
     df: pd.DataFrame,
     *,
@@ -379,10 +370,20 @@ def risk_averse_comparison_grid(
         ]
     if arms is None:
         arms = ["Surgery + RT", "Surgery + CT", "Surgery + RT + CT"]
-    rows: List[Dict[str, Any]] = []
-    for ep in endpoints:
-        for arm in arms:
-            res = compare_two_arms_df(
+    rows: List[Dict[str, Any]] = [
+        {
+            "endpoint": ep,
+            "baseline": baseline,
+            "arm": arm,
+            "percent_change": res["percent_change"],
+            "ci_low": float(res["CI95"][0]),
+            "ci_high": float(res["CI95"][1]),
+            "p_tilde": res["p~"],
+        }
+        for ep in endpoints
+        for arm in arms
+        for res in [
+            compare_two_arms_df(
                 df,
                 endpoint_col=ep,
                 arm_A=baseline,
@@ -392,21 +393,10 @@ def risk_averse_comparison_grid(
                 paired=paired,
                 seed=seed,
             )
-            if not res:
-                continue
-            rows.append(
-                {
-                    "endpoint": ep,
-                    "baseline": baseline,
-                    "arm": arm,
-                    "percent_change": res["percent_change"],
-                    "ci_low": float(res["CI95"][0]),
-                    "ci_high": float(res["CI95"][1]),
-                    "p_tilde": res["p~"],
-                }
-            )
+        ]
+        if res
+    ]
     return pd.DataFrame(rows)
-
 
 
 def compute_category_distribution(
@@ -416,32 +406,145 @@ def compute_category_distribution(
     label_column: str,
     patient_col: str = "patient_id",
 ) -> pd.DataFrame:
-    if patient_col in df.columns:
-        counts = df.groupby(column)[patient_col].nunique()
-    else:
-        counts = df[column].value_counts(dropna=False)
-    counts = counts.sort_values(ascending=False)
-    total = counts.sum()
-    labels = ["Unknown" if pd.isna(idx) else str(idx) for idx in counts.index]
-    table = pd.DataFrame({label_column: labels, "nr_patients": counts.astype(int).values})
-    if total:
-        table["percent"] = table["nr_patients"] / float(total) * 100.0
-    else:
-        table["percent"] = np.nan
+    counts = (
+        df.groupby(column)[patient_col].nunique()
+        if patient_col in df.columns
+        else df[column].value_counts(dropna=False)
+    ).sort_values(ascending=False)
+    table = counts.rename("nr_patients").reset_index().rename(columns={column: label_column})
+    table[label_column] = table[label_column].fillna("Unknown").astype(str)
+    total = table["nr_patients"].sum()
+    table["percent"] = table["nr_patients"].div(total).mul(100.0) if total else np.nan
     return table
 
 
 def _iter_category_subsets(df: pd.DataFrame, column: str) -> List[Tuple[str, pd.DataFrame]]:
     series = df[column]
-    known = [val for val in series.dropna().unique()]
-    known.sort(key=lambda x: str(x).lower())
-    subsets: List[Tuple[str, pd.DataFrame]] = []
-    for val in known:
-        mask = series == val
-        subsets.append((str(val), df.loc[mask].copy()))
+    known = sorted(series.dropna().unique(), key=lambda x: str(x).lower())
+    subsets = [(str(val), df.loc[series == val].copy()) for val in known]
     if series.isna().any():
         subsets.append(("Unknown", df.loc[series.isna()].copy()))
     return subsets
+
+
+def _subset_paths(output_dir: Path, slug: str) -> Dict[str, Path]:
+    paths = {
+        "ite": output_dir / f"{slug}_ite.csv",
+        "waterfall": output_dir / f"{slug}_waterfall_fan.png",
+        "trajectories": output_dir / f"{slug}_trajectories.png",
+        "risk": output_dir / f"{slug}_risk_averse.csv",
+    }
+    for path in paths.values():
+        path.parent.mkdir(parents=True, exist_ok=True)
+    return paths
+
+
+def _endpoint_specs_for_work(work: pd.DataFrame, endpoint_map: Mapping[str, str]) -> List[Tuple[str, str]]:
+    return [
+        (
+            "Local Recurrence",
+            "LR_prob_norm_global" if "LR_prob_norm_global" in work.columns else endpoint_map["local_recurrence"],
+        ),
+        (
+            "Metastasis",
+            "MET_prob_norm_global" if "MET_prob_norm_global" in work.columns else endpoint_map["metastasis"],
+        ),
+        (
+            "DOD",
+            "DOD_prob_norm_global" if "DOD_prob_norm_global" in work.columns else endpoint_map["death_of_disease"],
+        ),
+    ]
+
+
+def _write_ite_artifacts(
+    work: pd.DataFrame,
+    *,
+    label: str,
+    prefix: str,
+    paths: Dict[str, Path],
+    bootstrap: int,
+    seed: Optional[int],
+    endpoint_map: Mapping[str, str],
+    plot_config: Mapping[str, Any],
+) -> None:
+    ite_df = compute_individualized_treatment_effects(
+        work,
+        groups=DEFAULT_TREATMENT_GROUPS,
+        reference_group="Surgery only",
+        patient_col="patient_id",
+        time_col=TIMESTEP_COL,
+        endpoint_cols=endpoint_map,
+        group_col="group",
+    )
+    if ite_df.empty:
+        print(f"{prefix}={label}: no ITE rows")
+        return
+    ite_df.to_csv(paths["ite"], index=False)
+    plot_endpoint_waterfall_fan_grid(
+        ite_df,
+        histology=label,
+        out_path=paths["waterfall"],
+        n_boot=bootstrap,
+        seed=seed,
+        config=plot_config.get("waterfall", {}),
+    )
+    print(f"{prefix}={label}: wrote {paths['ite']} / {paths['waterfall']}")
+
+
+def _plot_trajectories_artifacts(
+    work: pd.DataFrame,
+    *,
+    label: str,
+    prefix: str,
+    path: Path,
+    bootstrap: int,
+    seed: Optional[int],
+    endpoint_map: Mapping[str, str],
+    plot_config: Mapping[str, Any],
+) -> None:
+    trajectories_cfg = plot_config.get("trajectories", {})
+    out_path = plot_three_endpoint_trajectories_with_bands(
+        work,
+        endpoints=_endpoint_specs_for_work(work, endpoint_map),
+        histology=label,
+        out_path=path,
+        n_boot=bootstrap,
+        seed=seed,
+        groups=DEFAULT_TREATMENT_GROUPS,
+        time_col=TIMESTEP_COL,
+        patient_col="patient_id",
+        group_col="group",
+        histology_col=HISTOLOGICAL_DIAGNOSIS_COL if HISTOLOGICAL_DIAGNOSIS_COL in work.columns else None,
+        agg=trajectories_cfg.get("agg", "median"),
+        band_method=trajectories_cfg.get("band_method", "rcqe"),
+        config=trajectories_cfg,
+    )
+    print(f"{prefix}={label}: wrote {out_path}")
+
+
+def _write_risk_grid(
+    work: pd.DataFrame,
+    *,
+    label: str,
+    prefix: str,
+    path: Path,
+    lam_gmd: float,
+    n_boot: int,
+    seed: Optional[int],
+) -> None:
+    grid = risk_averse_comparison_grid(
+        work,
+        lam_gmd=lam_gmd,
+        n_boot=n_boot,
+        paired=True,
+        seed=seed,
+        baseline="Surgery only",
+    )
+    if grid.empty:
+        print(f"{prefix}={label}: no risk grid")
+        return
+    grid.to_csv(path, index=False)
+    print(f"{prefix}={label}: wrote {path}")
 
 
 def _analyze_subset(
@@ -464,86 +567,42 @@ def _analyze_subset(
         work["group"] = _make_group_label(work)
 
     slug = f"{prefix}_{_slugify(label)}"
-    ite_path = output_dir / f"{slug}_ite.csv"
-    waterfall_path = output_dir / f"{slug}_waterfall_fan.png"
-    trajectories_path = output_dir / f"{slug}_trajectories.png"
-    risk_path = output_dir / f"{slug}_risk_averse.csv"
-
+    paths = _subset_paths(output_dir, slug)
     endpoint_map = {
         "local_recurrence": LOCAL_RECURRENCE_COL,
         "metastasis": METASTATIC_COL,
         "death_of_disease": DEAD_OF_DISEASE,
     }
 
-    ite_df = compute_individualized_treatment_effects(
+    _write_ite_artifacts(
         work,
-        groups=DEFAULT_TREATMENT_GROUPS,
-        reference_group="Surgery only",
-        patient_col="patient_id",
-        time_col=TIMESTEP_COL,
-        endpoint_cols=endpoint_map,
-        group_col="group",
-    )
-    if ite_df.empty:
-        print(f"{prefix}={label}: no ITE rows")
-    else:
-        ite_path.parent.mkdir(parents=True, exist_ok=True)
-        ite_df.to_csv(ite_path, index=False)
-        print(f"{prefix}={label}: wrote {ite_path}")
-        plot_endpoint_waterfall_fan_grid(
-            ite_df,
-            histology=label,
-            out_path=waterfall_path,
-            n_boot=bootstrap,
-            seed=seed,
-            config=plot_config.get("waterfall", {}),
-        )
-
-    endpoint_specs = [
-        (
-            "Local Recurrence",
-            "LR_prob_norm_global" if "LR_prob_norm_global" in work.columns else endpoint_map["local_recurrence"],
-        ),
-        (
-            "Metastasis",
-            "MET_prob_norm_global" if "MET_prob_norm_global" in work.columns else endpoint_map["metastasis"],
-        ),
-        (
-            "DOD",
-            "DOD_prob_norm_global" if "DOD_prob_norm_global" in work.columns else endpoint_map["death_of_disease"],
-        ),
-    ]
-    trajectories_cfg = plot_config.get("trajectories", {})
-    plot_three_endpoint_trajectories_with_bands(
-        work,
-        endpoints=endpoint_specs,
-        histology=label,
-        out_path=trajectories_path,
-        n_boot=bootstrap,
+        label=label,
+        prefix=prefix,
+        paths=paths,
+        bootstrap=bootstrap,
         seed=seed,
-        groups=DEFAULT_TREATMENT_GROUPS,
-        time_col=TIMESTEP_COL,
-        patient_col="patient_id",
-        group_col="group",
-        histology_col=HISTOLOGICAL_DIAGNOSIS_COL if HISTOLOGICAL_DIAGNOSIS_COL in work.columns else None,
-        agg=trajectories_cfg.get("agg", "median"),
-        band_method=trajectories_cfg.get("band_method", "rcqe"),
-        config=trajectories_cfg,
+        endpoint_map=endpoint_map,
+        plot_config=plot_config,
     )
-
-    grid = risk_averse_comparison_grid(
+    _plot_trajectories_artifacts(
         work,
+        label=label,
+        prefix=prefix,
+        path=paths["trajectories"],
+        bootstrap=bootstrap,
+        seed=seed,
+        endpoint_map=endpoint_map,
+        plot_config=plot_config,
+    )
+    _write_risk_grid(
+        work,
+        label=label,
+        prefix=prefix,
+        path=paths["risk"],
         lam_gmd=lam_gmd,
         n_boot=bootstrap,
-        paired=True,
         seed=seed,
-        baseline="Surgery only",
     )
-    if grid.empty:
-        print(f"{prefix}={label}: no risk grid")
-    else:
-        grid.to_csv(risk_path, index=False)
-        print(f"{prefix}={label}: wrote {risk_path}")
 
 
 def run_category_analysis(
