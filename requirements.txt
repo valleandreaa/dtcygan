@@ -1,0 +1,9 @@
+pyyaml
+numpy
+pandas
+scikit-learn
+matplotlib
+scipy
+torch
+tabulate
+python-dotenv

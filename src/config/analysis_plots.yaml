@@ -1,0 +1,55 @@
+waterfall:
+  treatments:
+    - "Surgery + RT"
+    - "Surgery + CT"
+    - "Surgery + RT + CT"
+  endpoints:
+    - "local_recurrence"
+    - "metastasis"
+    - "death_of_disease"
+  treatment_labels:
+    "Surgery + RT": "S+RT"
+    "Surgery + CT": "S+CT"
+    "Surgery + RT + CT": "S+RT+CT"
+  endpoint_labels:
+    "local_recurrence": "Local Recurrence"
+    "metastasis": "Metastasis"
+    "death_of_disease": "DOD"
+  sort_desc: false
+
+trajectories:
+  layout: "rows"
+  use_color: true
+  show_counts: true
+  show_errorbars: true
+  table_outside: true
+  table_mode: "summary"
+  side_titles: true
+  annotate_arm_dispersion: true
+  row_height: 5.0
+  panel_hspace: 0.85
+  table_gap: 0.1
+  legend_y: 1.4
+  tight_top: 0.92
+  agg: "median"
+  band_method: "rcqe"
+  color_map:
+    "Surgery only": "#1f77b4"
+    "Surgery + RT": "#ff7f0e"
+    "Surgery + CT": "#2ca02c"
+    "Surgery + RT + CT": "#d62728"
+  gray_line_map:
+    "Surgery only": "#111111"
+    "Surgery + RT": "#333333"
+    "Surgery + CT": "#555555"
+    "Surgery + RT + CT": "#000000"
+  linestyles:
+    "Surgery only": "-"
+    "Surgery + RT": "--"
+    "Surgery + CT": "-."
+    "Surgery + RT + CT": ":"
+  markers:
+    "Surgery only": "o"
+    "Surgery + RT": "s"
+    "Surgery + CT": "^"
+    "Surgery + RT + CT": "D"

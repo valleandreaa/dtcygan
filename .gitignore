@@ -1,0 +1,38 @@
+imgs/analysis/*
+
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Conda and virtual environments
+.env/
+.venv/
+venv/
+ENV/
+.envrc
+.conda/
+conda-env/
+
+# Distribution / packaging
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# IDE / editor settings
+.idea/
+*.swp
+
+# Jupyter Notebook checkpoints
+.ipynb_checkpoints/
+
+# Logs and artifacts
+logs/
+*.log
+artifacts/
+# data/
+
+# OS-specific files
+.DS_Store
+Thumbs.db
