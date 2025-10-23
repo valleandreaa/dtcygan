@@ -32,10 +32,7 @@ def load_dataset_payload(path: str | Path) -> Dict[str, Any]:
     - payload: parsed dataset dictionary [Dict[str, Any]]
     '''
     with open(path, "r", encoding="utf-8") as fh:
-        payload = json.load(fh)
-    if not isinstance(payload, dict) or "patients" not in payload:
-        raise ValueError(f"Dataset at {path} must contain a top-level 'patients' key.")
-    return payload
+        return json.load(fh)
 
 
 def load_dataset(path: str | Path) -> List[Dict[str, Any]]:
@@ -49,10 +46,7 @@ def load_dataset(path: str | Path) -> List[Dict[str, Any]]:
     - patients: list of patient records [List[Dict[str, Any]]]
     '''
     payload = load_dataset_payload(path)
-    patients = payload.get("patients", [])
-    if not isinstance(patients, list):
-        raise ValueError(f"Dataset at {path} does not contain a 'patients' list.")
-    return patients
+    return payload["patients"]
 
 
 def filter_patients(patients: List[Dict[str, Any]], keep_ids: Optional[set[str]]) -> List[Dict[str, Any]]:

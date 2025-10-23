@@ -22,6 +22,12 @@ class SummaryStats:
 
 
 def load_table(path: str | Path) -> pd.DataFrame:
+    ''' args:
+    - path: file path pointing to CSV or JSON table [str | Path]
+
+    return:
+    - table: dataframe loaded from the provided path [pd.DataFrame]
+    '''
     path = Path(path)
     if path.suffix.lower() == ".json":
         return pd.read_json(path)
@@ -29,16 +35,28 @@ def load_table(path: str | Path) -> pd.DataFrame:
 
 
 def ensure_dir(path: str | Path) -> Path:
+    ''' args:
+    - path: file path whose parent directories should exist [str | Path]
+
+    return:
+    - target: resolved path after ensuring parent directories [Path]
+    '''
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
     return target
 
 
 def summarize_numeric(df: pd.DataFrame, columns: Optional[Iterable[str]] = None) -> List[SummaryStats]:
-    if columns is None:
-        columns = df.select_dtypes(include="number").columns
+    ''' args:
+    - df: dataframe containing numeric columns to summarize [pd.DataFrame]
+    - columns: optional iterable restricting which columns to inspect [Optional[Iterable[str]]]
+
+    return:
+    - stats: summary statistics for each analyzed column [List[SummaryStats]]
+    '''
+    sel_cols = columns or df.select_dtypes(include="number").columns
     summaries: List[SummaryStats] = []
-    for col in columns:
+    for col in sel_cols:
         series = pd.to_numeric(df[col], errors="coerce").dropna()
         if series.empty:
             continue
@@ -56,6 +74,13 @@ def summarize_numeric(df: pd.DataFrame, columns: Optional[Iterable[str]] = None)
 
 
 def save_summary(summaries: List[SummaryStats], path: str | Path) -> None:
+    ''' args:
+    - summaries: list of summary statistics produced by summarize_numeric [List[SummaryStats]]
+    - path: destination CSV path for persisting the summary [str | Path]
+
+    return:
+    - none: writes the summary rows to disk [None]
+    '''
     rows = [s.__dict__ for s in summaries]
     pd.DataFrame(rows).to_csv(path, index=False)
 
@@ -66,6 +91,15 @@ def plot_histograms(
     output_dir: str | Path,
     bins: int = 30,
 ) -> List[Path]:
+    ''' args:
+    - df: dataframe containing numeric columns to plot [pd.DataFrame]
+    - columns: iterable of column names to render histograms for [Iterable[str]]
+    - output_dir: directory where histogram images will be saved [str | Path]
+    - bins: number of histogram bins to use [int]
+
+    return:
+    - paths: list of generated histogram image paths [List[Path]]
+    '''
     out_dir = Path(output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     outputs: List[Path] = []
@@ -92,6 +126,15 @@ def plot_grouped_boxplots(
     group_column: str,
     output_dir: str | Path,
 ) -> List[Path]:
+    ''' args:
+    - df: dataframe with grouping and value columns [pd.DataFrame]
+    - value_columns: iterable of value columns to visualize [Iterable[str]]
+    - group_column: categorical column used for grouping boxplots [str]
+    - output_dir: directory where boxplot images will be saved [str | Path]
+
+    return:
+    - paths: list of generated boxplot image paths [List[Path]]
+    '''
     out_dir = Path(output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     outputs: List[Path] = []
@@ -120,14 +163,22 @@ def plot_timeseries_mean(
     group_column: Optional[str],
     output_dir: str | Path,
 ) -> List[Path]:
+    ''' args:
+    - df: dataframe containing time series values [pd.DataFrame]
+    - time_column: column representing the temporal axis [str]
+    - value_columns: iterable of value columns to plot [Iterable[str]]
+    - group_column: optional column for grouping trajectories [Optional[str]]
+    - output_dir: directory where timeseries figures will be stored [str | Path]
+
+    return:
+    - paths: list of generated timeseries plot paths [List[Path]]
+    '''
     out_dir = Path(output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     outputs: List[Path] = []
-    value_columns = list(value_columns)
-    if not value_columns:
-        value_columns = df.select_dtypes(include="number").columns.tolist()
+    columns = list(value_columns) or df.select_dtypes(include="number").columns.tolist()
     group_values = df[group_column].unique() if group_column else [None]
-    for value_col in value_columns:
+    for value_col in columns:
         fig, ax = plt.subplots(figsize=(6, 4))
         for group in group_values:
             subset = df if group is None else df[df[group_column] == group]

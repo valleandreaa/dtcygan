@@ -25,14 +25,19 @@ class NumericSpec:
     missing_rate: float = 0.0
 
     def sample(self, rng: random.Random, size: int) -> List[Optional[float]]:
-        values = []
-        for _ in range(size):
-            if rng.random() < self.missing_rate:
-                values.append(None)
-                continue
-            raw = rng.uniform(self.minimum, self.maximum)
-            values.append(round(raw, self.decimals))
-        return values
+        ''' args:
+        - rng: random number generator used for sampling [random.Random]
+        - size: number of values to produce [int]
+
+        return:
+        - samples: list of numeric values with possible missing entries [List[Optional[float]]]
+        '''
+        return [
+            None
+            if rng.random() < self.missing_rate
+            else round(rng.uniform(self.minimum, self.maximum), self.decimals)
+            for _ in range(size)
+        ]
 
 
 @dataclass
@@ -43,13 +48,17 @@ class IntegerSpec:
     missing_rate: float = 0.0
 
     def sample(self, rng: random.Random, size: int) -> List[Optional[int]]:
-        values = []
-        for _ in range(size):
-            if rng.random() < self.missing_rate:
-                values.append(None)
-                continue
-            values.append(rng.randint(self.minimum, self.maximum))
-        return values
+        ''' args:
+        - rng: random number generator used for sampling [random.Random]
+        - size: number of values to produce [int]
+
+        return:
+        - samples: list of integer values with possible missing entries [List[Optional[int]]]
+        '''
+        return [
+            None if rng.random() < self.missing_rate else rng.randint(self.minimum, self.maximum)
+            for _ in range(size)
+        ]
 
 
 @dataclass
@@ -60,6 +69,12 @@ class CategoricalSpec:
     missing_rate: float = 0.0
 
     def __post_init__(self) -> None:
+        ''' args:
+        - none: initialization uses dataclass fields directly []
+
+        return:
+        - none: post-init validates and normalizes probabilities [None]
+        '''
         self._normalized_probs: Optional[List[float]] = None
         if self.probabilities is None:
             return
@@ -79,16 +94,23 @@ class CategoricalSpec:
         self._normalized_probs = [p / total for p in self.probabilities]
 
     def sample(self, rng: random.Random, size: int) -> List[Optional[str]]:
-        values = []
-        for _ in range(size):
-            if rng.random() < self.missing_rate:
-                values.append(None)
-                continue
-            if self._normalized_probs is None:
-                values.append(rng.choice(self.categories))
-            else:
-                values.append(rng.choices(self.categories, weights=self._normalized_probs, k=1)[0])
-        return values
+        ''' args:
+        - rng: random number generator used for sampling [random.Random]
+        - size: number of values to produce [int]
+
+        return:
+        - samples: list of categorical values with possible missing entries [List[Optional[str]]]
+        '''
+        return [
+            None
+            if rng.random() < self.missing_rate
+            else (
+                rng.choice(self.categories)
+                if self._normalized_probs is None
+                else rng.choices(self.categories, weights=self._normalized_probs, k=1)[0]
+            )
+            for _ in range(size)
+        ]
 
 
 @dataclass
@@ -98,13 +120,17 @@ class BernoulliSpec:
     missing_rate: float = 0.0
 
     def sample(self, rng: random.Random, size: int) -> List[Optional[int]]:
-        values = []
-        for _ in range(size):
-            if rng.random() < self.missing_rate:
-                values.append(None)
-                continue
-            values.append(int(rng.random() < self.probability))
-        return values
+        ''' args:
+        - rng: random number generator used for sampling [random.Random]
+        - size: number of values to produce [int]
+
+        return:
+        - samples: list of Bernoulli outcomes with possible missing entries [List[Optional[int]]]
+        '''
+        return [
+            None if rng.random() < self.missing_rate else int(rng.random() < self.probability)
+            for _ in range(size)
+        ]
 
 
 FEATURE_TYPES = {
@@ -134,6 +160,12 @@ _MODALITY_RULES = (
 
 
 def load_schema(path: str | Path | None = None) -> Dict[str, List[Any]]:
+    ''' args:
+    - path: optional path to a schema YAML file [str | Path | None]
+
+    return:
+    - schema: dictionary with feature specifications grouped by modality [Dict[str, List[Any]]]
+    '''
     schema_path = Path(path) if path else DEFAULT_SCHEMA_PATH
     with open(schema_path, "r", encoding="utf-8") as fh:
         raw = yaml.safe_load(fh) or {}
@@ -154,10 +186,15 @@ def load_schema(path: str | Path | None = None) -> Dict[str, List[Any]]:
 
 
 def _sample_feature_matrix(features: List[Any], size: int, rng: random.Random) -> Dict[str, List[Optional[Any]]]:
-    columns: Dict[str, List[Optional[Any]]] = {}
-    for feat in features:
-        columns[feat.name] = feat.sample(rng, size)
-    return columns
+    ''' args:
+    - features: collection of feature specifications [List[Any]]
+    - size: number of samples per feature [int]
+    - rng: random number generator used for sampling [random.Random]
+
+    return:
+    - columns: mapping from feature names to sampled value lists [Dict[str, List[Optional[Any]]]]
+    '''
+    return {feat.name: feat.sample(rng, size) for feat in features}
 
 
 def _build_patient_records(
@@ -168,40 +205,63 @@ def _build_patient_records(
     *,
     static: bool = False,
 ) -> List[Dict[str, Any]]:
+    ''' args:
+    - features: feature specifications to sample [List[Any]]
+    - patient_id: identifier assigned to generated records [str]
+    - timesteps: number of timepoints per patient [int]
+    - rng: random number generator used for sampling [random.Random]
+    - static: toggles one-time sampling for static features [bool]
+
+    return:
+    - records: list of patient records keyed by feature and metadata [List[Dict[str, Any]]]
+    '''
     if not features:
         return []
 
     sample_size = 1 if static else timesteps
     columns = _sample_feature_matrix(features, sample_size, rng)
-    records = []
-    for t in range(timesteps):
-        if static:
-            entry = {name: values[0] for name, values in columns.items()}
-        else:
-            entry = {name: values[t] for name, values in columns.items()}
-        entry["_id"] = patient_id
-        entry["timestep"] = t
-        records.append(entry)
-    return records
+    if static:
+        base = {name: values[0] for name, values in columns.items()}
+        return [
+            {
+                **base,
+                "_id": patient_id,
+                "timestep": t,
+            }
+            for t in range(timesteps)
+        ]
+
+    return [
+        {
+            **{name: values[t] for name, values in columns.items()},
+            "_id": patient_id,
+            "timestep": t,
+        }
+        for t in range(timesteps)
+    ]
 
 
 def _apply_treatment_dependencies(
     treatment_records: List[Dict[str, Any]],
     actual_records: List[Dict[str, Any]],
 ) -> None:
+    ''' args:
+    - treatment_records: generated treatment features per timestep [List[Dict[str, Any]]]
+    - actual_records: generated actual treatment outcomes per timestep [List[Dict[str, Any]]]
+
+    return:
+    - none: updates input records in place to respect modality dependencies [None]
+    '''
     for treatment_entry, actual_entry in zip(treatment_records, actual_records):
         for rule in _MODALITY_RULES:
             admin_value = treatment_entry.get(rule["admin_key"])
-
             if admin_value is None:
                 episode_value: Optional[int] = None
                 clear_dependents = True
-            elif bool(admin_value):
-                episode_value = 1
-                clear_dependents = False
             else:
-                episode_value = 0
-                clear_dependents = True
+                active = bool(admin_value)
+                episode_value = int(active)
+                clear_dependents = not active
 
             episode_key = rule["episode_key"]
             if episode_key in actual_entry:
@@ -216,6 +276,15 @@ def _apply_treatment_dependencies(
 
 
 def generate_patient(schema: Dict[str, List[Any]], patient_id: str, timesteps: int, rng: random.Random) -> Dict[str, Any]:
+    ''' args:
+    - schema: dictionary of feature specs grouped by modality [Dict[str, List[Any]]]
+    - patient_id: identifier assigned to the synthetic patient [str]
+    - timesteps: number of timepoints to simulate [int]
+    - rng: random number generator used for sampling [random.Random]
+
+    return:
+    - patient: structured synthetic patient record [Dict[str, Any]]
+    '''
     clinical = _build_patient_records(
         schema.get("clinical", []), patient_id, timesteps, rng, static=True
     )
@@ -238,6 +307,16 @@ def generate_dataset(
     schema_path: str | Path | None = None,
     schema: Dict[str, List[Any]] | None = None,
 ) -> Dict[str, Any]:
+    ''' args:
+    - num_patients: number of synthetic patients to generate [int]
+    - timesteps: number of timesteps per patient [int]
+    - seed: optional seed for reproducible sampling [int | None]
+    - schema_path: optional path to the schema definition [str | Path | None]
+    - schema: optional pre-loaded schema definition [Dict[str, List[Any]] | None]
+
+    return:
+    - dataset: dictionary containing generated patient list [Dict[str, Any]]
+    '''
     rng = random.Random(seed)
     schema_def = schema or load_schema(schema_path)
     patients = [generate_patient(schema_def, f"P{idx:05d}", timesteps, rng) for idx in range(1, num_patients + 1)]
@@ -245,5 +324,12 @@ def generate_dataset(
 
 
 def save_dataset(dataset: Dict[str, Any], path: str | Path) -> None:
+    ''' args:
+    - dataset: generated dataset ready for serialization [Dict[str, Any]]
+    - path: output path for the JSON file [str | Path]
+
+    return:
+    - none: writes the dataset to disk [None]
+    '''
     with open(path, "w", encoding="utf-8") as fh:
         json.dump(dataset, fh, indent=2)

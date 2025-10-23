@@ -27,7 +27,6 @@ from dtcygan.eval_utils import (
     load_dataset_payload,
     load_dataset,
     filter_patients,
-    collect_labels_from_patients,
     ensure_probability_metadata,
     load_checkpoint_bundle,
     build_counterfactual_patients,
@@ -1297,16 +1296,8 @@ def main(argv: Optional[List[str]] = None) -> None:
         aligned_cf_patients.append(patient)
     cf_patients = aligned_cf_patients
 
-    status_labels = sorted(
-        set(dataset_status_labels or OUTCOME_LABELS)
-        | set(collect_labels_from_patients(cf_patients, "status_at_last_follow_up", "status_probabilities"))
-        | set(collect_labels_from_patients(ref_patients, "status_at_last_follow_up", "status_probabilities"))
-    )
-    endpoint_labels = sorted(
-        set(dataset_endpoint_labels)
-        | set(collect_labels_from_patients(cf_patients, "treatment_endpoint_category", "endpoint_probabilities"))
-        | set(collect_labels_from_patients(ref_patients, "treatment_endpoint_category", "endpoint_probabilities"))
-    )
+    status_labels = sorted(dataset_status_labels or OUTCOME_LABELS)
+    endpoint_labels = sorted(dataset_endpoint_labels)
 
     ensure_probability_metadata(cf_patients, status_labels, endpoint_labels)
     ensure_probability_metadata(ref_patients, status_labels, endpoint_labels)

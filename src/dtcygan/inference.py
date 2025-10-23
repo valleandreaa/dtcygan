@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+import numpy as np
 import torch
 
 from dtcygan.training import (
@@ -18,15 +19,21 @@ from dtcygan.training import (
 
 
 def load_checkpoint(path: str | Path, device: torch.device) -> tuple[Config, dict, torch.nn.Module]:
+    ''' args:
+    - path: filesystem location of the trained checkpoint [str | Path]
+    - device: target torch device for loading weights [torch.device]
+
+    return:
+    - checkpoint_data: tuple containing config, metadata, and initialized generator [tuple[Config, dict, torch.nn.Module]]
+    '''
     checkpoint = torch.load(path, map_location=device)
     cfg = Config(**checkpoint["config"])
     metadata = checkpoint.get("metadata") or {}
-    clin_dim = metadata.get("clin_dim")
-    treat_dim = metadata.get("treat_dim")
-    cond_dim = metadata.get("cond_dim")
-    if None in {clin_dim, treat_dim, cond_dim}:
+    dims = {key: metadata.get(key) for key in ("clin_dim", "treat_dim", "cond_dim")}
+    if None in dims.values():
         raise ValueError("Checkpoint metadata must include clin_dim, treat_dim, and cond_dim.")
 
+    clin_dim, treat_dim, cond_dim = (int(dims[key]) for key in ("clin_dim", "treat_dim", "cond_dim"))
     generator = LSTMGenerator(clin_dim, cond_dim, cfg.g_hidden, treat_dim, cfg.num_layers).to(device)
     generator.load_state_dict(checkpoint["Gx"])
     generator.eval()
@@ -39,6 +46,15 @@ def load_dataset(
     spec_clinical: Optional[Dict[str, Any]] = None,
     spec_treatment: Optional[Dict[str, Any]] = None,
 ) -> SyntheticSequenceDataset:
+    ''' args:
+    - path: JSON dataset path containing synthetic patients [str | Path]
+    - seq_len: maximum sequence length expected by the model [int]
+    - spec_clinical: optional clinical feature specification [Optional[Dict[str, Any]]]
+    - spec_treatment: optional treatment feature specification [Optional[Dict[str, Any]]]
+
+    return:
+    - dataset: synthetic sequence dataset aligned with model expectations [SyntheticSequenceDataset]
+    '''
     with open(path, "r", encoding="utf-8") as fh:
         data = json.load(fh)
     return SyntheticSequenceDataset(
@@ -50,20 +66,24 @@ def load_dataset(
 
 
 def summarize_sequence(tensor: torch.Tensor, mask: torch.Tensor) -> Dict[str, List[float]]:
+    ''' args:
+    - tensor: generated sequence tensor with shape [B, T, F] [torch.Tensor]
+    - mask: binary mask indicating valid entries in the sequence [torch.Tensor]
+
+    return:
+    - summary: dictionary with mean and last-step vectors per batch item [Dict[str, List[float]]]
+    '''
     array = tensor.detach().cpu().numpy()
     mask_np = mask.detach().cpu().numpy()
 
     mask_sums = mask_np.sum(axis=1, keepdims=True).clip(min=1.0)
     mean = (array * mask_np).sum(axis=1) / mask_sums
 
-    last_vectors: List[List[float]] = []
     valid_steps = mask_np.sum(axis=2) > 0
-    for seq, val_flags in zip(array, valid_steps):
-        if val_flags.any():
-            last_idx = int(val_flags.nonzero()[0][-1])
-            last_vectors.append(seq[last_idx].tolist())
-        else:
-            last_vectors.append(seq[-1].tolist())
+    last_vectors = [
+        seq[np.flatnonzero(flags)[-1]].tolist() if np.flatnonzero(flags).size else seq[-1].tolist()
+        for seq, flags in zip(array, valid_steps)
+    ]
 
     return {"mean": mean.tolist(), "last": last_vectors}
 
@@ -74,6 +94,15 @@ def generate_counterfactuals(
     output_path: str | Path,
     scenario_names: Optional[List[str]] = None,
 ) -> Path:
+    ''' args:
+    - checkpoint_path: trained model checkpoint to load [str | Path]
+    - dataset_path: synthetic dataset to draw patients from [str | Path]
+    - output_path: destination JSON file for generated counterfactuals [str | Path]
+    - scenario_names: optional additional scenario labels to include [Optional[List[str]]]
+
+    return:
+    - result_path: resolved path to the saved counterfactual summaries [Path]
+    '''
     device = resolve_device()
     cfg, metadata, generator = load_checkpoint(checkpoint_path, device)
     dataset = load_dataset(
@@ -96,18 +125,16 @@ def generate_counterfactuals(
         step_mask = ((mask_clin.sum(dim=2, keepdim=True) + mask_treat.sum(dim=2, keepdim=True)) > 0).float()
         lengths = step_mask.squeeze(-1).sum(dim=1).clamp(min=1).long()
 
-        x_clin = x_clin * step_mask
-        mask_clin = mask_clin * step_mask
-        cond_actual = cond_actual * step_mask
-        mask_actual = mask_actual * step_mask
+        x_clin, mask_clin, cond_actual, mask_actual = [
+            tensor * step_mask for tensor in (x_clin, mask_clin, cond_actual, mask_actual)
+        ]
 
         scenarios = {"actual": cond_actual}
         cond_random = randomize_multiple_one_hot(cond_actual, mask_actual, extra_ones=1) * step_mask
         scenarios["random"] = cond_random
         if scenario_names:
             for name in scenario_names:
-                if name not in scenarios:
-                    scenarios[name] = cond_random
+                scenarios.setdefault(name, cond_random)
 
         for scenario, cond_tensor in scenarios.items():
             with torch.no_grad():
