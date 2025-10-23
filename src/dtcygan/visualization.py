@@ -23,6 +23,12 @@ DEFAULT_ENDPOINT_KEYS = ["local_recurrence", "metastasis", "death_of_disease"]
 
 
 def as_prob(series: pd.Series) -> pd.Series:
+    ''' args:
+    - series: probability-like values to coerce into numeric form [pd.Series]
+
+    return:
+    - probabilities: series clipped to the unit interval and cast to float [pd.Series]
+    '''
     values = pd.to_numeric(series, errors="coerce")
     if values.dropna().empty:
         return pd.Series(np.nan, index=series.index)
@@ -31,7 +37,12 @@ def as_prob(series: pd.Series) -> pd.Series:
 
 
 def load_plot_config(path: Optional[str | Path] = None) -> Dict[str, Any]:
-    """Load analysis plotting defaults from YAML."""
+    ''' args:
+    - path: optional override pointing to a custom YAML config [Optional[str | Path]]
+
+    return:
+    - config: plotting configuration dictionary loaded from YAML [Dict[str, Any]]
+    '''
 
     if path is None:
         return copy.deepcopy(_default_plot_config())
@@ -40,22 +51,48 @@ def load_plot_config(path: Optional[str | Path] = None) -> Dict[str, Any]:
 
 @lru_cache()
 def _default_plot_config() -> Dict[str, Any]:
+    ''' args:
+    - none: no positional parameters are required []
+
+    return:
+    - config: cached plotting configuration read from the default YAML [Dict[str, Any]]
+    '''
     return _read_plot_config(DEFAULT_CONFIG_PATH)
 
 
 def _read_plot_config(path: Path) -> Dict[str, Any]:
+    ''' args:
+    - path: filesystem path to the YAML file describing plot defaults [Path]
+
+    return:
+    - config: plotting configuration dictionary parsed from YAML [Dict[str, Any]]
+    '''
     with open(path, "r", encoding="utf-8") as fh:
         data = yaml.safe_load(fh) or {}
     return dict(data)
 
 
 def _prepare_waterfall_base(ite_df: pd.DataFrame, patient_col: str) -> pd.DataFrame:
+    ''' args:
+    - ite_df: individualized treatment effect records with endpoints [pd.DataFrame]
+    - patient_col: column indicating unique patient identifiers [str]
+
+    return:
+    - base: standardized dataframe with treatment, endpoint, and numeric ITE [pd.DataFrame]
+    '''
     base = ite_df[[patient_col, "treatment", "endpoint", "ite"]].copy()
     base["ite"] = base["ite"].astype(float)
     return base
 
 
 def _create_waterfall_axes(n_rows: int, n_cols: int) -> Tuple[plt.Figure, np.ndarray]:
+    ''' args:
+    - n_rows: number of endpoint rows to render [int]
+    - n_cols: number of treatment columns to render [int]
+
+    return:
+    - fig_axes: matplotlib figure and normalized axes grid [Tuple[plt.Figure, np.ndarray]]
+    '''
     fig, axes = plt.subplots(
         n_rows,
         n_cols,
@@ -63,18 +100,20 @@ def _create_waterfall_axes(n_rows: int, n_cols: int) -> Tuple[plt.Figure, np.nda
         sharex=False,
         sharey=False,
     )
-    if n_rows == 1 and n_cols == 1:
-        axes_arr = np.array([[axes]])
-    elif n_rows == 1:
-        axes_arr = np.array([axes])
-    elif n_cols == 1:
-        axes_arr = axes.reshape(-1, 1)
-    else:
-        axes_arr = axes
+    axes_arr = np.atleast_2d(axes)
+    if n_cols == 1 and axes_arr.shape[0] == 1:
+        axes_arr = axes_arr.T
     return fig, axes_arr
 
 
 def _endpoint_ylim(base: pd.DataFrame, endpoint: str) -> Tuple[float, float]:
+    ''' args:
+    - base: flattened waterfall dataframe with patient ITE values [pd.DataFrame]
+    - endpoint: clinical endpoint to compute limits for [str]
+
+    return:
+    - limits: symmetric y-axis bounds derived from percentile spread [Tuple[float, float]]
+    '''
     vals = base.loc[base["endpoint"] == endpoint, "ite"].dropna().to_numpy(dtype=float)
     if vals.size == 0:
         return (-0.01, 0.01)
@@ -91,6 +130,15 @@ def _panel_values(
     treatment: str,
     patient_col: str,
 ) -> np.ndarray:
+    ''' args:
+    - base: standardized waterfall dataframe [pd.DataFrame]
+    - endpoint: target endpoint label for filtering [str]
+    - treatment: treatment arm label to extract [str]
+    - patient_col: column holding patient identifiers [str]
+
+    return:
+    - values: per-patient ITE values as numeric numpy array [np.ndarray]
+    '''
     vals = (
         base[(base["endpoint"] == endpoint) & (base["treatment"] == treatment)][[patient_col, "ite"]]
         .drop_duplicates(subset=[patient_col])["ite"]
@@ -109,6 +157,17 @@ def _render_waterfall_panel(
     seed: Optional[int],
     sort_desc: bool,
 ) -> bool:
+    ''' args:
+    - ax: matplotlib axes to populate [Axes]
+    - vals: individual treatment effect samples for the panel [np.ndarray]
+    - y_limits: symmetric axis bounds to enforce [Tuple[float, float]]
+    - n_boot: number of bootstrap replicates for the fan [int]
+    - seed: random seed for reproducibility [Optional[int]]
+    - sort_desc: flag to sort ITEs descending before plotting [bool]
+
+    return:
+    - drawn: indicates whether the panel rendered data successfully [bool]
+    '''
     if vals.size == 0:
         ax.text(0.5, 0.5, "No data", ha="center", va="center", transform=ax.transAxes)
         ax.set_axis_off()
@@ -148,6 +207,21 @@ def plot_endpoint_waterfall_fan_grid(
     sort_desc: Optional[bool] = None,
     config: Optional[Mapping[str, Any]] = None,
 ) -> Path:
+    ''' args:
+    - ite_df: individualized treatment effect records to plot [pd.DataFrame]
+    - out_path: filesystem target for the generated figure [str | Path]
+    - treatments: ordered sequence of treatment groups to include [Optional[Sequence[str]]]
+    - endpoints: ordered sequence of endpoint keys to include [Optional[Sequence[str]]]
+    - histology: optional histology label for the figure title [Optional[str]]
+    - n_boot: bootstrap iterations per panel for rank envelope [int]
+    - seed: random seed for bootstrap reproducibility [Optional[int]]
+    - patient_col: column containing patient identifiers [str]
+    - sort_desc: optional override to sort decreasing by ITE [Optional[bool]]
+    - config: supplemental configuration dictionary [Optional[Mapping[str, Any]]]
+
+    return:
+    - figure_path: resolved path to the saved waterfall grid [Path]
+    '''
     cfg = dict(config or {})
     endpoints = list(endpoints or cfg.get("endpoints", DEFAULT_ENDPOINT_KEYS))
     treatments = list(treatments or cfg.get("treatments", DEFAULT_TREATMENT_GROUPS[1:]))
@@ -209,12 +283,26 @@ def plot_endpoint_waterfall_fan_grid(
 
 
 def _prepare_grouped_dataframe(df: pd.DataFrame, groups: Sequence[str], group_col: str) -> pd.DataFrame:
+    ''' args:
+    - df: full dataframe containing treatment group assignments [pd.DataFrame]
+    - groups: treatment groups to retain in the analysis [Sequence[str]]
+    - group_col: column containing group labels within df [str]
+
+    return:
+    - filtered: dataframe limited to requested groups [pd.DataFrame]
+    '''
     if group_col not in df.columns:
         raise KeyError(f"Column '{group_col}' not present in dataframe.")
     return df[df[group_col].isin(groups)].copy()
 
 
 def _resolve_endpoint_columns(endpoint_cols: Optional[Mapping[str, str]]) -> Dict[str, str]:
+    ''' args:
+    - endpoint_cols: optional mapping from endpoint keys to dataframe columns [Optional[Mapping[str, str]]]
+
+    return:
+    - resolved: endpoint to column mapping with defaults applied [Dict[str, str]]
+    '''
     if endpoint_cols is not None:
         return dict(endpoint_cols)
     return {
@@ -225,6 +313,13 @@ def _resolve_endpoint_columns(endpoint_cols: Optional[Mapping[str, str]]) -> Dic
 
 
 def _normalized_trapezoid(times: np.ndarray, values: np.ndarray) -> float:
+    ''' args:
+    - times: time grid used for integration [np.ndarray]
+    - values: values corresponding to the time grid [np.ndarray]
+
+    return:
+    - normalized_area: trapezoidal integral normalized by total span [float]
+    '''
     times = np.asarray(times, dtype=float)
     values = np.asarray(values, dtype=float)
     if values.size == 0:
@@ -245,6 +340,14 @@ def _compute_patient_ites(
     patient_col: str,
     time_col: str,
 ) -> pd.DataFrame:
+    ''' args:
+    - delta: dataframe containing per-time differences per patient [pd.DataFrame]
+    - patient_col: column denoting patient identifiers [str]
+    - time_col: column capturing time steps [str]
+
+    return:
+    - per_patient: dataframe with integrated ITE per patient [pd.DataFrame]
+    '''
     if delta.empty:
         return pd.DataFrame(columns=[patient_col, "ite"])
 
@@ -270,6 +373,19 @@ def _treatment_effects_for_endpoint(
     groups: Sequence[str],
     group_col: str,
 ) -> List[pd.DataFrame]:
+    ''' args:
+    - df: dataframe with endpoints pivotable by treatment arm [pd.DataFrame]
+    - endpoint_label: friendly endpoint name for downstream labeling [str]
+    - endpoint_col: dataframe column holding endpoint values [str]
+    - patient_col: column with patient identifiers [str]
+    - time_col: column tracking time points [str]
+    - reference_group: treatment group serving as baseline [str]
+    - groups: treatment groups to compare against reference [Sequence[str]]
+    - group_col: column containing group labels [str]
+
+    return:
+    - frames: list of per-endpoint treatment effect dataframes [List[pd.DataFrame]]
+    '''
     pivot = df.pivot_table(index=[patient_col, time_col], columns=group_col, values=endpoint_col)
     if reference_group not in pivot.columns:
         return []
@@ -295,6 +411,14 @@ def _append_composite_scores(
     *,
     patient_col: str,
 ) -> pd.DataFrame:
+    ''' args:
+    - result: long-format dataframe of patient endpoint ITEs [pd.DataFrame]
+    - weights: per-endpoint weights for composite score computation [Mapping[str, float]]
+    - patient_col: column containing patient identifiers [str]
+
+    return:
+    - enriched: dataframe with composite_ite column merged in [pd.DataFrame]
+    '''
     weight_series = pd.Series(weights, dtype=float)
     composite = (
         result.pivot_table(index=[patient_col, "treatment"], columns="endpoint", values="ite")
@@ -314,6 +438,16 @@ def _build_weighted_timecourse(
     *,
     time_col: str,
 ) -> Optional[pd.DataFrame]:
+    ''' args:
+    - ref: dataframe for the reference arm over time [pd.DataFrame]
+    - trt: dataframe for the treatment arm over time [pd.DataFrame]
+    - ep_cols: mapping from endpoint names to dataframe columns [Mapping[str, str]]
+    - weight_series: endpoint weights aligned to columns [pd.Series]
+    - time_col: column containing time stamps [str]
+
+    return:
+    - composite: weighted timecourse dataframe ready for integration [Optional[pd.DataFrame]]
+    '''
     comp_df: Optional[pd.DataFrame] = None
     for ep_name, col in ep_cols.items():
         if col not in ref.columns or col not in trt.columns or ep_name not in weight_series.index:
@@ -340,6 +474,15 @@ def _bootstrap_composite_intervals(
     n_boot: int,
     time_col: str,
 ) -> Tuple[float, float]:
+    ''' args:
+    - comp_df: weighted composite timecourse for one patient [pd.DataFrame]
+    - rng: random generator for bootstrap sampling [np.random.Generator]
+    - n_boot: number of bootstrap draws [int]
+    - time_col: column containing time coordinates [str]
+
+    return:
+    - interval: low and high percentile bounds for composite ITE [Tuple[float, float]]
+    '''
     if comp_df.empty or n_boot <= 0:
         return (np.nan, np.nan)
     times = comp_df[time_col].to_numpy()
@@ -375,6 +518,22 @@ def _append_composite_ci(
     groups: Sequence[str],
     group_col: str,
 ) -> pd.DataFrame:
+    ''' args:
+    - result: dataframe containing per-patient composite ITE scores [pd.DataFrame]
+    - df: original longitudinal dataframe with endpoints by group [pd.DataFrame]
+    - weights: mapping of endpoint weights for composite calculation [Mapping[str, float]]
+    - endpoint_cols: mapping of endpoint keys to dataframe columns [Mapping[str, str]]
+    - patient_col: column holding patient identifiers [str]
+    - time_col: column with temporal indices [str]
+    - reference_group: treatment group serving as baseline [str]
+    - n_boot: bootstrap replicates for confidence intervals [int]
+    - seed: random seed for reproducibility [Optional[int]]
+    - groups: treatment groups considered in the analysis [Sequence[str]]
+    - group_col: column indicating group membership [str]
+
+    return:
+    - with_ci: dataframe augmented with composite confidence interval bounds [pd.DataFrame]
+    '''
     if n_boot <= 0:
         return result
 
@@ -440,25 +599,39 @@ def compute_individualized_treatment_effects(
     n_boot: int = 0,
     seed: Optional[int] = 42,
 ) -> pd.DataFrame:
+    ''' args:
+    - df: longitudinal dataframe with patient outcomes and treatments [pd.DataFrame]
+    - groups: treatment groups to consider in effect estimation [Sequence[str]]
+    - reference_group: treatment group acting as the baseline arm [str]
+    - patient_col: column with patient identifiers [str]
+    - time_col: column representing temporal ordering [str]
+    - endpoint_cols: optional mapping from endpoint keys to dataframe columns [Optional[Mapping[str, str]]]
+    - group_col: column indicating treatment assignment [str]
+    - weights: optional mapping of endpoint weights for composite scores [Optional[Mapping[str, float]]]
+    - n_boot: bootstrap iterations for composite confidence intervals [int]
+    - seed: random seed controlling bootstrap generators [Optional[int]]
+
+    return:
+    - ite_frame: dataframe of individualized treatment (and optional composite) effects [pd.DataFrame]
+    '''
     df_grouped = _prepare_grouped_dataframe(df, groups, group_col=group_col)
     endpoint_map = _resolve_endpoint_columns(endpoint_cols)
 
-    frames: List[pd.DataFrame] = []
-    for endpoint, col in endpoint_map.items():
-        if col not in df_grouped.columns:
-            continue
-        frames.extend(
-            _treatment_effects_for_endpoint(
-                df_grouped,
-                endpoint,
-                col,
-                patient_col=patient_col,
-                time_col=time_col,
-                reference_group=reference_group,
-                groups=groups,
-                group_col=group_col,
-            )
+    frames: List[pd.DataFrame] = [
+        frame
+        for endpoint, col in endpoint_map.items()
+        if col in df_grouped.columns
+        for frame in _treatment_effects_for_endpoint(
+            df_grouped,
+            endpoint,
+            col,
+            patient_col=patient_col,
+            time_col=time_col,
+            reference_group=reference_group,
+            groups=groups,
+            group_col=group_col,
         )
+    ]
 
     if not frames:
         return pd.DataFrame(columns=[patient_col, "treatment", "endpoint", "ite"])
@@ -498,6 +671,19 @@ def _bootstrap_timecourse_by_group(
     agg: Literal["median", "mean"] = "median",
     band_method: Literal["pointwise", "rcqe"] = "rcqe",
 ) -> Tuple[np.ndarray, np.ndarray, Tuple[np.ndarray, np.ndarray], np.ndarray]:
+    ''' args:
+    - df: dataframe containing observations for a single treatment arm [pd.DataFrame]
+    - value_col: column holding probability estimates or scores [str]
+    - time_col: column capturing time indices [str]
+    - patient_col: optional column indicating patient identifiers [str]
+    - n_boot: number of bootstrap replicates [int]
+    - seed: random seed controlling resampling [Optional[int]]
+    - agg: aggregation function applied across bootstrap samples [Literal["median", "mean"]]
+    - band_method: approach for confidence bands [Literal["pointwise", "rcqe"]]
+
+    return:
+    - trajectory: time grid, central estimate, interval bounds, and per-time counts [Tuple[np.ndarray, np.ndarray, Tuple[np.ndarray, np.ndarray], np.ndarray]]
+    '''
     work = df[[time_col, value_col] + ([patient_col] if patient_col in df.columns else [])].copy()
     work[value_col] = pd.to_numeric(work[value_col], errors="coerce").clip(0.0, 1.0)
     work = work.dropna(subset=[value_col, time_col])
@@ -507,24 +693,24 @@ def _bootstrap_timecourse_by_group(
     times = np.array(sorted(work[time_col].dropna().unique()))
     agg_fn = np.nanmedian if agg == "median" else np.nanmean
 
-    counts = []
     if patient_col in work.columns:
-        for t in times:
-            counts.append(int(work.loc[work[time_col] == t, patient_col].dropna().nunique()))
+        counts = np.array(
+            [work.loc[work[time_col] == t, patient_col].dropna().nunique() for t in times],
+            dtype=int,
+        )
     else:
-        for t in times:
-            counts.append(int(work.loc[work[time_col] == t, value_col].notna().sum()))
-    counts = np.array(counts, dtype=int)
+        counts = np.array(
+            [work.loc[work[time_col] == t, value_col].notna().sum() for t in times],
+            dtype=int,
+        )
 
     rng = np.random.default_rng(seed)
 
-    use_cluster = patient_col in work.columns and work[patient_col].notna().any()
-    if use_cluster:
+    clusters: List[np.ndarray] = []
+    if patient_col in work.columns and work[patient_col].notna().any():
         codes, uniques = pd.factorize(work[patient_col], sort=False)
         clusters = [np.flatnonzero(codes == k) for k in range(len(uniques))]
-        n_clusters = len(clusters)
-        if n_clusters == 0:
-            use_cluster = False
+    use_cluster = bool(clusters)
 
     boots = np.empty((n_boot, times.size), dtype=float)
     for b in range(n_boot):
@@ -572,6 +758,15 @@ def _rank_consistent_envelope(
     seed: Optional[int] = 42,
     sort_desc: bool = False,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    ''' args:
+    - values: array of individualized treatment effects to resample [np.ndarray]
+    - n_boot: number of bootstrap replicates [int]
+    - seed: random seed for reproducibility [Optional[int]]
+    - sort_desc: whether to sort values descending for envelopes [bool]
+
+    return:
+    - envelopes: lower, median, and upper percentile trajectories [Tuple[np.ndarray, np.ndarray, np.ndarray]]
+    '''
     vals = np.asarray(values, dtype=float)
     vals = vals[np.isfinite(vals)]
     N = vals.size
@@ -608,6 +803,25 @@ def plot_three_endpoint_trajectories_with_bands(
     band_method: Literal["pointwise", "rcqe"] = "rcqe",
     config: Optional[Mapping[str, Any]] = None,
 ) -> Path:
+    ''' args:
+    - df: dataframe containing longitudinal outcomes for multiple treatment arms [pd.DataFrame]
+    - endpoints: ordered label-column pairs to render [Sequence[Tuple[str, str]]]
+    - out_path: output path for the generated figure [str | Path]
+    - groups: treatment groups to visualize [Sequence[str]]
+    - time_col: column marking temporal ordering [str]
+    - patient_col: column containing patient identifiers [str]
+    - group_col: column indicating treatment group membership [str]
+    - histology_col: optional column for histology filtering [Optional[str]]
+    - histology: optional histology value to retain [Optional[str]]
+    - n_boot: bootstrap iterations for confidence bands [int]
+    - seed: random seed driving bootstrap sampling [Optional[int]]
+    - agg: aggregation measure for central tendency [Literal["median", "mean"]]
+    - band_method: method used to compute interval bands [Literal["pointwise", "rcqe"]]
+    - config: optional mapping with layout, color, and annotation overrides [Optional[Mapping[str, Any]]]
+
+    return:
+    - figure_path: resolved path to the saved three-endpoint trajectory figure [Path]
+    '''
     if df.empty:
         print("plot_three_endpoint_trajectories_with_bands: Empty DataFrame; nothing to plot.")
         return Path(out_path)
@@ -701,8 +915,6 @@ def plot_three_endpoint_trajectories_with_bands(
     )
 
     any_drawn = False
-    counts_map: Dict[str, np.ndarray] = {}
-    trajectories: Dict[str, Tuple[np.ndarray, np.ndarray, np.ndarray]] = {}
     times_ref: Optional[np.ndarray] = None
 
     for ax_idx, (ax, (ep_name, ep_col)) in enumerate(zip(np.ravel(axes), endpoints)):
@@ -710,12 +922,12 @@ def plot_three_endpoint_trajectories_with_bands(
             ax.set_visible(False)
             continue
 
-        trajectories.clear()
-        counts_map.clear()
-        times_ref = None
+        trajectories: Dict[str, Tuple[np.ndarray, np.ndarray, np.ndarray]] = {}
+        counts_map: Dict[str, np.ndarray] = {}
+        times_ref_current: Optional[np.ndarray] = None
         for arm in groups:
-            sub = work[work[group_col] == arm]
-            if sub.empty or sub[ep_col].dropna().empty:
+            sub = work.loc[(work[group_col] == arm) & (work[ep_col].notna())]
+            if sub.empty:
                 continue
             times, center, (low, high), counts = _bootstrap_timecourse_by_group(
                 sub,
@@ -727,26 +939,27 @@ def plot_three_endpoint_trajectories_with_bands(
                 agg=agg,
                 band_method=band_method,
             )
-            if times.size == 0:
+            if not times.size:
                 continue
-            if times_ref is None:
-                times_ref = times
+            if times_ref_current is None:
+                times_ref_current = times
             trajectories[arm] = (center, low, high)
             counts_map[arm] = counts
 
-        if times_ref is None:
+        if not trajectories or times_ref_current is None:
             ax.set_visible(False)
             continue
+        times_ref = times_ref_current
 
         for arm in groups:
             if arm not in trajectories:
                 continue
             center, low, high = trajectories[arm]
             base_c = color_map.get(arm, "#1f77b4") if use_color else gray_line_map.get(arm, "#333333")
-            ax.fill_between(times_ref, low, high, color=base_c, alpha=0.18, linewidth=0)
+            ax.fill_between(times_ref_current, low, high, color=base_c, alpha=0.18, linewidth=0)
 
-        if len(times_ref) > 0:
-            step = max(1, int(len(times_ref) / 10))
+        if len(times_ref_current) > 0:
+            step = max(1, int(len(times_ref_current) / 10))
         else:
             step = 1
 
@@ -755,13 +968,13 @@ def plot_three_endpoint_trajectories_with_bands(
                 continue
             center, low, high = trajectories[arm]
             line_c = color_map.get(arm, "#1f77b4") if use_color else gray_line_map.get(arm, "#333333")
-            ax.plot(times_ref, center, linestyle=linestyles.get(arm, "-"), color=line_c, linewidth=2.2, label=arm, zorder=3)
+            ax.plot(times_ref_current, center, linestyle=linestyles.get(arm, "-"), color=line_c, linewidth=2.2, label=arm, zorder=3)
             marker_style = markers.get(arm, "o")
-            ax.plot(times_ref[::step], center[::step], linestyle="None", marker=marker_style, color=line_c, markersize=4, alpha=0.8, zorder=4)
+            ax.plot(times_ref_current[::step], center[::step], linestyle="None", marker=marker_style, color=line_c, markersize=4, alpha=0.8, zorder=4)
             if show_errorbars:
                 yerr_low = np.maximum(0, center[::step] - low[::step])
                 yerr_high = np.maximum(0, high[::step] - center[::step])
-                ax.errorbar(times_ref[::step], center[::step], yerr=[yerr_low, yerr_high], fmt="none", ecolor=line_c, elinewidth=1.0, capsize=2, alpha=0.9, zorder=5)
+                ax.errorbar(times_ref_current[::step], center[::step], yerr=[yerr_low, yerr_high], fmt="none", ecolor=line_c, elinewidth=1.0, capsize=2, alpha=0.9, zorder=5)
 
         if side_titles:
             ax.text(-0.05, 0.5, ep_name, transform=ax.transAxes, rotation=90, va="center", ha="right", fontsize=12)
@@ -791,7 +1004,7 @@ def plot_three_endpoint_trajectories_with_bands(
             bins = np.linspace(0.0, 1.0, nbins + 1)
             I_vals: List[float] = []
             dG_vals: List[float] = []
-            for t in times_ref:
+            for t in times_ref_current:
                 values_by_arm: Dict[str, np.ndarray] = {}
                 ns: Dict[str, int] = {}
                 total_n = 0
@@ -853,10 +1066,10 @@ def plot_three_endpoint_trajectories_with_bands(
                     bbox=dict(boxstyle="round", facecolor="white", alpha=0.65, edgecolor="none"),
                 )
 
-        if show_counts and times_ref is not None:
+        if show_counts and times_ref_current is not None:
             shown_arms = [arm for arm in groups if arm in trajectories]
             if shown_arms:
-                col_labels = [f"t={int(t)}" for t in times_ref]
+                col_labels = [f"t={int(t)}" for t in times_ref_current]
                 row_map = {
                     "Surgery only": "S",
                     "Surgery + RT": "S+RT",
@@ -871,12 +1084,12 @@ def plot_three_endpoint_trajectories_with_bands(
                     summary_rows = []
                     for a in shown_arms:
                         c_arr, l_arr, h_arr = trajectories[a]
-                        summary_rows.append([fmt(c_arr[i], l_arr[i], h_arr[i]) for i in range(len(times_ref))])
+                        summary_rows.append([fmt(c_arr[i], l_arr[i], h_arr[i]) for i in range(len(times_ref_current))])
                     if table_mode == "summary":
                         cell_text = summary_rows
                     else:
                         cell_text = [
-                            [f"n={int(counts_map[a][i])}\n{summary_rows[j][i]}" for i in range(len(times_ref))]
+                            [f"n={int(counts_map[a][i])}\n{summary_rows[j][i]}" for i in range(len(times_ref_current))]
                             for j, a in enumerate(shown_arms)
                         ]
                 else:

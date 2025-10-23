@@ -53,7 +53,7 @@ Example:
 
 ```bash
 python generate_data.py \
-  --patients 25 \
+  --patients 1000 \
   --timesteps 5 \
   --output data/synthetic.json \
   --schema src/config/synthetic.yaml
@@ -61,7 +61,7 @@ python generate_data.py \
 
 Key arguments:
 
-* `--patients`: number of patient records to simulate (default `25`).
+* `--patients`: number of patient records to simulate (default `1000`).
 * `--timesteps`: sequence length per patient (default `5`).
 * `--seed`: RNG seed for reproducibility (default `42`).
 * `--output`: destination JSON path (parent folders created, file overwritten).
@@ -105,7 +105,7 @@ Basic invocation:
 ```bash
 python analyze.py \
   --dataset data/synthetic.json \
-  --checkpoint data/models/dtcygan_20250928_135339.pt \
+  --checkpoint path-to-model.pt \
   --output-dir imgs/analysis \
   --bootstrap 200 \
   --lambda-gmd 0.0
@@ -142,7 +142,7 @@ Useful options:
 * `--dataset`: dataset JSON aligned with the model feature specification.
 * `--checkpoint`: generator checkpoint to score.
 * `--output-dir`: directory for validation artifacts (created automatically).
-* `--patients`: number of patients sampled for counterfactual evaluation (default `25`).
+* `--patients`: number of patients sampled for counterfactual evaluation (default `1000`).
 * `--timesteps`: sequence length used during validation (defaults to the training setting).
 * `--seed`: seed controlling patient sampling and bootstrap draws.
 * `--bootstrap`: number of resamples for confidence intervals (set `0` to skip).
