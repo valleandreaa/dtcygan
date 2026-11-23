@@ -1,0 +1,46 @@
+experiment: semisynthetic
+data_seed: 42
+split_seed: 62042
+training_seed: 101
+timesteps: 16
+baseline_end: 8
+evaluation_start: 9
+evaluation_end: 15
+
+training:
+  epochs: 100
+  batch_size: 32
+  generator_lr: 0.00004
+  discriminator_lr: 0.00005
+  beta1: 0.5
+  beta2: 0.999
+  cycle_weight: 20.0
+  identity_weight: 30.0
+  factual_weight: 10.0
+  condition_weight: 5.0
+  generator_hidden: 256
+  discriminator_hidden: 128
+  layers: 3
+  missingness_indicators: true
+
+weighting:
+  method: stabilized_time_local_iptw
+  probability_clip: 0.01
+  lower_quantile: 0.01
+  upper_quantile: 0.99
+
+features:
+  clinical: [anion_gap, bicarbonate, bilirubin, creatinine, chloride, glucose,
+    hematocrit, hemoglobin, lactate, platelet, potassium, pt, sodium, bun, wbc,
+    heart_rate, systolic_bp, diastolic_bp, mean_bp, respiratory_rate,
+    temperature, spo2, agegroup, heightgroup, weightgroup, gender]
+  treatment: [temporal_treatment, outcome_factual]
+
+ablations:
+  full: {}
+  no_cycle: {cycle_weight: 0.0}
+  no_identity: {identity_weight: 0.0}
+  no_recurrent: {architecture: temporal_mlp}
+  no_treatment_prediction:
+    treatment_prediction: false
+    condition_weight: 0.0

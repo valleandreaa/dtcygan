@@ -1,0 +1,371 @@
+analysis:
+  name: surgery_vs_surgery_plus_perioperative_radiotherapy
+  description: >-
+    Target-trial style analysis restricted to the soft-tissue-sarcoma scope of
+    the DTCyGAN manuscript. Definitive surgery is the common treatment
+    backbone; the exposure contrast is addition of perioperative radiotherapy.
+  primary_estimand: overlap_weighted_risk_difference
+  secondary_estimand: exploratory_cate
+  patient_id_col: patient_id
+  interval_col: interval
+  treatment_col: treatment_arm
+  at_risk_col: censoring_at_risk
+  observed_col: observed
+  baseline_covariates:
+    - biopsy_grading
+    - who_diagnosis_code
+    - body_location_group
+    - anatomic_region_grouping
+    - initial_size
+    - any_whoops
+  # Reviewer-requested variables are audited and used only when present with
+  # valid baseline timing and sufficient coverage. Their absence is retained
+  # in the covariate-availability table rather than silently ignored.
+  extra_baseline_covariates:
+    - age_at_diagnosis
+    - sex
+    - performance_status
+    - treatment_intent
+    - resectability
+  time_varying_censoring_covariates:
+    - lag_local_recurrence
+    - lag_margin_status
+    - lag_reoperation_count
+    - lag_disease_status
+  outcome_columns:
+    local_recurrence: local_recurrence
+    dod: dod
+  estimand_outcomes: [local_recurrence]
+  min_covariate_coverage: 0.05
+  propensity_clip: 0.01
+  weight_truncation_quantiles: [0.01, 0.99]
+  horizons_months: [12, 24]
+  bootstrap_samples: 0
+  seed: 42
+
+supported_strata:
+  modifiers: [biopsy_grading, who_diagnosis_code]
+  horizon_months: 24
+  minimum_arm_n: 20
+  minimum_group_ess: 20
+  maximum_absolute_smd: 0.10
+  maximum_nonoverlap_fraction: 0.05
+  bootstrap_samples: 0
+
+sensitivity_analysis:
+  bootstrap_samples: 0
+
+target_trial:
+  time_zero: pathology_diagnosis
+  population: strict_d_without_systemic_therapy
+  treatment: preoperative_rt_plus_surgery_vs_surgery
+  treatment_decision: pathology_diagnosis
+  within_episode_handling: exact_event_decision_order_without_counting_process_split
+  preoperative_eligibility:
+    definitive_surgery_not_completed_before_time_zero: true
+    alive: true
+    local_recurrence_free: true
+  postoperative_radiotherapy_policy: exclude_patient
+  outcome: local_recurrence
+  competing_event: all_cause_death
+  follow_up_months: 24
+
+time:
+  interval_months: 3
+  n_intervals: 8
+  horizon_months: 24
+  require_time_zero: true
+  allow_episode_time_zero_fallback: false
+  time_zero_candidates:
+    - general.date_pathology_report
+    - general.date_of_diagnosis
+    - date_pathology_report
+    - date_of_diagnosis
+
+population:
+  require_definitive_surgery: true
+  # Strict-D eligibility is defined by malignant grade plus deep/superficial
+  # soft-tissue location, matching preliminary_analysis.ipynb. Histology is
+  # retained as baseline X but is not an additional eligibility gate.
+  require_manuscript_histology: false
+  require_malignant_soft_tissue: true
+  malignant_grades: [G1, G2, G3]
+  soft_tissue_regions: [deep_soft_tissue, superficial_soft_tissue]
+  require_localized_at_baseline: true
+  exclude_baseline_local_recurrence: true
+  primary_surgery_types: [index, whoops]
+  excluded_surgery_indications:
+    - first_surgery_for_local_recurrence
+    - second_or_more_surgery_for_local_recurrence
+    - first_surgery_for_metastasis
+    - second_or_more_surgery_for_metastasis
+  # Exact grouped-code mapping of the 13 manuscript histologies in the current
+  # curated ETL (config_frozen.py). Keep this list configurable because a
+  # future extract may expose the original histology labels again.
+  manuscript_histology_groups:
+    - vascular_sarcoma
+    - liposarcoma
+    - fibroblastic_tumor
+    - gist
+    - other_soft_tissue_sarcoma
+    - leiomyosarcoma
+    - undifferentiated_sarcoma
+  manuscript_histology_labels:
+    - Intramuscular myxoma
+    - Atypical lipomatous tumor
+    - Atypical lipomatous tumor / well-differentiated liposarcoma
+    - Dedifferentiated liposarcoma
+    - Myxoid liposarcoma
+    - Pleomorphic liposarcoma
+    - Desmoid-type fibromatosis
+    - Desmoid‐type fibromatosis
+    - Solitary fibrous tumor
+    - Myxofibrosarcoma
+    - Leiomyosarcoma
+    - Angiosarcoma of soft tissues
+    - Synovial sarcoma
+    - Tenosynovial giant cell tumor
+    - Undifferentiated / unclassified sarcoma
+    - Undifferentiated/unclassified sarcoma
+    - GIST
+  histology_candidates:
+    - tumor_characteristics.histological_diagnosis
+    - tumor_characteristics.who_diagnosis_code
+    - histological_subtype
+    - who_diagnosis_code
+  chemotherapy_policy: exclude_any
+
+treatment:
+  surgery:
+    eligible_types: [index, whoops]
+  radiotherapy:
+    eligible_indications: [preoperative, postoperative]
+    excluded_indications:
+      - definitive
+      - palliative
+      - stereotactic
+      - recurrence
+      - metastasis
+    days_before_surgery: 365
+    days_after_surgery: 180
+    allow_date_inference_when_indication_missing: false
+    allowed_nonexposure_indications: []
+    nonqualifying_radiotherapy_policy: exclude
+    top_level_preoperative_flag_candidates:
+      - treatments.radiotherapy_preoperative
+      - radiotherapy_preoperative
+
+variables:
+  patient_id:
+    role: identifier
+    candidates: [_id, patient_id, id]
+    required: true
+  biopsy_grading:
+    role: baseline_confounder
+    candidates:
+      - tumor_characteristics.biopsy_grading
+      - tumor_characteristics.grading_fnclcc
+      - biopsy_grading
+      - fnclcc_grade
+    required: true
+  who_diagnosis_code:
+    role: baseline_confounder
+    candidates:
+      - tumor_characteristics.who_diagnosis_code
+      - tumor_characteristics.histological_diagnosis
+      - who_diagnosis_code
+      - histological_subtype
+    required: true
+  body_location_group:
+    role: baseline_confounder
+    candidates:
+      - tumor_characteristics.body_location_group
+      - body_location_group
+    required: false
+  anatomic_region_grouping:
+    role: baseline_confounder
+    candidates:
+      - tumor_characteristics.anatomic_region_grouping
+      - anatomic_region_grouping
+    required: true
+  initial_size:
+    role: baseline_confounder
+    candidates:
+      - tumor_characteristics.initial_size
+      - episodes.diagnosis.fields.initial_size
+      - initial_size
+      - tumour_size_at_diagnosis_mm
+    required: false
+  any_whoops:
+    role: baseline_confounder
+    candidates: [treatments.any_whoops, any_whoops, whoops]
+    required: false
+  whoops_margin_status:
+    role: baseline_confounder
+    candidates:
+      - treatments.whoops_margin_status
+      - whoops_margin_status
+    required: false
+  age_at_diagnosis:
+    role: baseline_confounder
+    candidates:
+      - general.age_at_diagnosis
+      - general.age
+      - age_at_diagnosis
+      - age
+    required: false
+    primary: false
+  sex:
+    role: baseline_confounder
+    candidates:
+      - general.sex
+      - general.gender
+      - sex
+      - gender
+    required: false
+    primary: false
+  performance_status:
+    role: baseline_confounder
+    candidates:
+      - general.performance_status
+      - general.ecog_performance_status
+      - performance_status
+      - ecog
+      - ecog_performance_status
+    required: false
+    primary: false
+  treatment_intent:
+    role: baseline_confounder
+    candidates:
+      - treatments.treatment_intent
+      - general.treatment_intent
+      - treatment_intent
+      - intent
+    required: false
+    primary: false
+  resectability:
+    role: baseline_confounder
+    candidates:
+      - tumor_characteristics.resectability
+      - general.resectability
+      - resectability
+      - resectable
+    required: false
+    primary: false
+  baseline_metastasis:
+    role: eligibility
+    candidates:
+      - tumor_characteristics.metastasis_present_at_diagnosis
+      - tumor_characteristics.initial_metastasis
+      - metastasis_present_at_diagnosis
+      - initial_metastatic_disease
+    required: true
+  prediagnosis_local_recurrence:
+    role: eligibility
+    candidates:
+      - treatments.pre_diagnosis_local_recurrence
+      - pre_diagnosis_local_recurrence
+    required: false
+  surgery:
+    role: common_treatment_backbone
+    candidates: [episodes.surgery, treatments.any_surgery, total_surgeries]
+    required: true
+  perioperative_radiotherapy:
+    role: treatment
+    candidates:
+      - episodes.radiotherapy
+      - treatments.radiotherapy_preoperative
+      - treatments.any_radiotherapy
+      - total_radiotherapy
+    required: true
+  hyperthermia_status:
+    role: treatment_version
+    candidates: [episodes.treatments.hyperthermia_status, hyperthermia_status]
+    required: false
+  radiotherapy_indication:
+    role: treatment_version
+    candidates:
+      - episodes.treatments.radiotherapy_indication
+      - episodes.treatments.radiotherapy_indications
+      - radiotherapy_indication
+    required: false
+  radiotherapy_type:
+    role: treatment_version
+    candidates: [episodes.treatments.radiotherapy_type, radiotherapy_type]
+    required: false
+  radiotherapy_total_dose:
+    role: treatment_version
+    candidates: [episodes.treatments.radiotherapy_total_dose, radiotherapy_total_dose]
+    required: false
+  radiotherapy_total_dose_gy:
+    role: treatment_version
+    candidates: [episodes.treatments.radiotherapy_total_dose_gy, radiotherapy_total_dose_gy]
+    required: false
+  radiotherapy_num_fractions:
+    role: treatment_version
+    candidates: [episodes.treatments.radiotherapy_num_fractions, radiotherapy_num_fractions]
+    required: false
+  radiotherapy_dose_per_fraction_gy:
+    role: treatment_version
+    candidates:
+      - episodes.treatments.radiotherapy_dose_per_fraction_gy
+      - radiotherapy_dose_per_fraction_gy
+    required: false
+  radiotherapy_fraction_count:
+    role: treatment_version
+    candidates: [episodes.treatments.radiotherapy_fraction_count, radiotherapy_fraction_count]
+    required: false
+  radiotherapy_interrupted:
+    role: treatment_version
+    candidates: [episodes.treatments.radiotherapy_interrupted, radiotherapy_interrupted]
+    required: false
+  surgery_type:
+    role: treatment_version
+    candidates:
+      - episodes.treatments.surgery_type
+      - episodes.treatments.surgery_types
+      - surgery_type
+    required: false
+  pathologist_margin_judgment:
+    role: mediator
+    candidates:
+      - episodes.treatments.pathologist_margin_judgement
+      - episodes.treatments.pathologist_margin_judgment
+      - treatments.pathologist_margin_judgement
+      - treatments.pathologist_margin_judgment
+      - pathologist_margin_judgement
+      - pathologist_margin_judgment
+    required: false
+  number_of_reoperations:
+    role: downstream_mediator
+    candidates:
+      - episodes.treatments.number_of_reoperations
+      - number_all_operations
+      - total_reoperations
+    required: false
+  local_recurrence:
+    role: outcome
+    candidates: [episodes.local_recurrence, treatments.any_local_recurrence, had_local_recurrence]
+    required: true
+  all_cause_death:
+    role: competing_event
+    candidates: [episodes.diagnosis.date_death, episodes.diagnosis.last_status,
+      treatments.date_death, patient_status]
+    required: false
+  chemotherapy:
+    role: exclusion
+    candidates: [episodes.chemotherapy, treatments.any_chemotherapy, total_chemotherapy]
+    required: false
+
+outcomes:
+  local_recurrence: true
+  death_is_competing_event_for: [local_recurrence]
+
+outputs:
+  person_period: person_period.csv
+  patient_summary: patient_summary.csv
+  exclusions: exclusions.csv
+  cohort_flow: cohort_flow.csv
+  rolled_dag: surgery_rt_rolled_dag.json
+  unrolled_dag: surgery_rt_unrolled_dag.json
+  variable_roles: causal_variable_roles.csv

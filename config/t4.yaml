@@ -1,0 +1,30 @@
+repository: https://github.com/ruoqi-liu/T4.git
+commit: bf2b2b4235921ffc0ab30c85bf0064fdb9160aaf
+directory: external/T4
+work_directory: output/t4/work
+patch: patches/t4-paper.patch
+
+synthetic:
+  seed: 2027
+  dataset: t4_t50_n5000_seed2027
+  epochs: 50
+  max_stay: 43
+  prediction_window: 7
+  hidden_size: 128
+  batch_size: 32
+  learning_rate: 0.00005
+  optimizer: adam
+  augmentation_ratio: 0.4
+  static_features: [static_00, static_01, static_02, static_03, static_04]
+
+semisynthetic:
+  seed: 101
+  dataset: cohort
+  epochs: 50
+  max_stay: 16
+  prediction_window: 7
+  hidden_size: 128
+  batch_size: 32
+  learning_rate: 0.00005
+  optimizer: adam
+  augmentation_ratio: 0.4

@@ -1,0 +1,852 @@
+diff --git a/model/dataset.py b/model/dataset.py
+index bfc93bc..d79bf36 100644
+--- a/model/dataset.py
++++ b/model/dataset.py
+@@ -1,10 +1,11 @@
+ import pickle
+ import os
++import json
+ import numpy as np
+ 
+ import torch
+ from torch.utils import data
+-from torch.utils.data import DataLoader,TensorDataset
++from torch.utils.data import DataLoader,TensorDataset,Subset
+ 
+ demos = ['agegroup', 'heightgroup','weightgroup', 'gender']
+ 
+@@ -19,7 +20,8 @@ def load_and_process_data(args, device, logging, dataset_name):
+         logging.info('preprocessing dataset: {}'.format(dataset_name))
+         # data: {pat_id: {x_1: [v1, v2,...], x_2: [v1, v2,...]}}
+         data = pickle.load(open(args.data_dir + dataset_name + '.pkl', 'rb'))
+-        features = pickle.load(open(args.data_dir + 'header.pkl', 'rb'))
++        header_path = getattr(args, 'header_path', None) or os.path.join(args.data_dir, 'header.pkl')
++        features = pickle.load(open(header_path, 'rb'))
+         X, X_demo, Treatment, Treatment_label, Y, Death, Mask = [], [], [], [], [], [], []
+ 
+         os.makedirs('stat/', exist_ok=True)
+@@ -31,12 +33,22 @@ def load_and_process_data(args, device, logging, dataset_name):
+             vals = np.array(vals)
+             output.write('{},{:.2f},{:.2f}\n'.format(val, np.mean(vals), np.std(vals)))
+ 
++        static_features = getattr(args, 'static_features', None) or demos
+         for id, datum in data.items():
+             x = []
+             for val in features:
+                 x.append(datum[val])
+ 
+-            y = np.array(datum['outcome'])
++            y = np.asarray(datum['outcome'], dtype=float)
++            if y.ndim == 2 and y.shape[0] == 2:
++                # Legacy files store factual and oracle-counterfactual rows.
++                # Only factual outcomes are permitted to enter model training.
++                y = y[0]
++            if y.ndim != 1:
++                raise ValueError(
++                    'Training outcome must be a one-dimensional factual sequence; '
++                    'oracle counterfactuals belong in the external truth artifact'
++                )
+             # x.append(y)
+             x = np.array(x).T
+ 
+@@ -56,7 +68,7 @@ def load_and_process_data(args, device, logging, dataset_name):
+             Treatment.append(treatment_pad)
+             Y.append(y_pad)
+             x_demo = []
+-            for demo in demos:
++            for demo in static_features:
+                 x_demo.append(datum[demo])
+             x_demo = np.array(x_demo)
+             x_demo = torch.tensor(x_demo.astype(np.float32)).unsqueeze(0)
+@@ -102,6 +114,31 @@ def load_and_process_data(args, device, logging, dataset_name):
+         return features, dataset
+ 
+ 
++def load_shared_split_subsets(dataset, data_path, split_manifest_path):
++    """Return fixed train/validation/test subsets after identity validation."""
++    with open(data_path, 'rb') as handle:
++        source_ids = [str(value) for value in pickle.load(handle).keys()]
++    with open(split_manifest_path, encoding='utf-8') as handle:
++        manifest = json.load(handle)
++    patients = manifest.get('patients', [])
++    manifest_ids = [str(row['source_patient_id']) for row in patients]
++    if manifest_ids != source_ids:
++        raise ValueError('Split manifest patient order does not match the T4 training pickle')
++    if len(dataset) != len(source_ids):
++        raise ValueError('T4 tensor dataset dropped patients from the shared split manifest')
++    valid = {'train', 'validation', 'test'}
++    labels = [str(row['split']) for row in patients]
++    if set(labels) != valid:
++        raise ValueError('Shared split manifest must contain train, validation, and test')
++    indices = {
++        name: [index for index, label in enumerate(labels) if label == name]
++        for name in ('train', 'validation', 'test')
++    }
++    if any(not values for values in indices.values()):
++        raise ValueError('Every shared split must contain at least one patient')
++    return tuple(Subset(dataset, indices[name]) for name in ('train', 'validation', 'test'))
++
++
+ def pad_and_truncate(id, x, y, treatment, max_stay, pre_window):
+     x_len = len(x)
+     x_obs = x[:x_len-pre_window]
+@@ -129,4 +166,4 @@ def pad_and_truncate(id, x, y, treatment, max_stay, pre_window):
+ 
+     treatment_pre_str = ''.join(str(int(x)) for x in treatment_pred)
+     treatment_label = int(treatment_pre_str, 2)
+-    return x_pad, treatment_pad, treatment_label, y_pad, mask
+\ No newline at end of file
++    return x_pad, treatment_pad, treatment_label, y_pad, mask
+diff --git a/model/main.py b/model/main.py
+index 535af5a..ecf2602 100644
+--- a/model/main.py
++++ b/model/main.py
+@@ -12,7 +12,7 @@ import torch
+ from torch.utils.data.dataset import random_split
+ from torch.utils.data import DataLoader,TensorDataset
+ 
+-from dataset import load_and_process_data
++from dataset import load_and_process_data, load_shared_split_subsets
+ from seq2seq import Encoder,AttentionDecoder,Seq2Seq
+ 
+ timestamp = datetime.now().strftime('%Y-%m%d_%H%M%S')
+@@ -32,11 +32,28 @@ def parse_args():
+     parser.add_argument('--hid_size', type=int, default=64)
+     parser.add_argument('--dropout_rate', type=float, default=0.3)
+     parser.add_argument('--batch_size', type=int, default=8)
++    parser.add_argument(
++        '--optimizer',
++        choices=('adamw', 'adam'),
++        default='adamw',
++        help=(
++            'Training optimizer. adamw preserves the released-code behavior; '
++            'adam matches the optimizer named in the paper.'
++        ),
++    )
+     parser.add_argument('--log_file', type=str, default='log/{}/{}.log'.format(date, hour))
+     parser.add_argument('--save_model', type=str, default='checkpoints/{}/{}.pt'.format(date, hour))
+     # parser.add_argument('--pretrained_model', type=str, default='checkpoints/{}/{}_pretrain.pt'.format(date, hour))
+     parser.add_argument('--pretrained_model', type=str, default='checkpoints/2021-0801/103302_7_pretrain.pt')
+     parser.add_argument('--data_dir', type=str, default='../data/')
++    parser.add_argument('--header_path', type=str)
++    parser.add_argument('--split_manifest', type=str)
++    parser.add_argument(
++        '--static_features', nargs='+',
++        default=['agegroup', 'heightgroup', 'weightgroup', 'gender'],
++    )
++    parser.add_argument('--dataset_name', type=str, default='synthetic_mimic3')
++    parser.add_argument('--external_dataset_name', type=str, default='amsterdamdb')
+     parser.add_argument('--load_cache', type=bool, default=False)
+     parser.add_argument('--output_amsterdamdb', type=str, default='results/{}/{}.csv'.format(date, hour))
+     parser.add_argument('--output_mimic', type=str, default='results/{}/{}.csv'.format(date, hour))
+@@ -52,7 +69,14 @@ def train(model, train_dataset, valid_dataset, train_data, ps_estimator, args):
+     valid_dataloader = DataLoader(valid_dataset, batch_size=args.batch_size, shuffle=True)
+     # criterion = torch.nn.CrossEntropyLoss()
+     criterion=torch.nn.MSELoss()
+-    optimizer = torch.optim.AdamW(model.parameters(), lr=args.learning_rate, weight_decay=1e-8)
++    if args.optimizer == 'adam':
++        optimizer = torch.optim.Adam(model.parameters(), lr=args.learning_rate)
++    else:
++        optimizer = torch.optim.AdamW(
++            model.parameters(),
++            lr=args.learning_rate,
++            weight_decay=1e-8,
++        )
+     training_steps = args.epochs * len(train_dataloader)
+     scheduler = get_linear_schedule_with_warmup(optimizer, 0, training_steps)
+ 
+@@ -164,7 +188,9 @@ def batch_aug(dataset, ps_estimator, args, device):
+     with torch.no_grad():
+         for x, x_demo, treatment,treatment_label, y, death, mask in dataloader:
+             _, _, _, ps_output, _ = ps_estimator(x, y, x_demo, treatment)
+-            ps_output = torch.sigmoid(ps_output).to('cpu').detach().data.numpy()
++            # Exclude the encoder-step propensity; augmentation compares the
++            # seven future treatment decisions represented by treatment_label.
++            ps_output = torch.sigmoid(ps_output[:, 1:]).to('cpu').detach().data.numpy()
+             ps_output_all = np.zeros(shape=(ps_output.shape[0], len(label2treatment.keys()), ps_output.shape[1]))
+             treatments.append(treatment)
+             treatment_labels.append(treatment_label)
+@@ -196,7 +222,7 @@ def get_aug_sample(x, y, x_demo, treatment, treatment_label, ps_estimator, ps_tr
+     ps_estimator.eval()
+     with torch.no_grad():
+         _, _, _, ps_batch, _ = ps_estimator(x, y, x_demo, treatment)
+-    ps_batch = torch.sigmoid(ps_batch).to('cpu').detach().data.numpy()
++    ps_batch = torch.sigmoid(ps_batch[:, 1:]).to('cpu').detach().data.numpy()
+ 
+     label2treatment = treatment2label2(args.pre_window)
+     labels = sorted(label2treatment.keys())
+@@ -422,21 +448,52 @@ def main():
+ 
+     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+ 
+-    # mimic3 for train, validation and internal test
+-    features, mimic3 = load_and_process_data(args, device, logging, dataset_name='mimic3')
+-
+-    # amsterdamdb for external test
+-    _, amsterdamdb = load_and_process_data(args, device, logging, dataset_name='amsterdamdb')
+-
+-    num_train = int(len(mimic3) * 0.7)
+-    num_val = int(len(mimic3) * 0.1)
+-    split_train_, split_valid_, split_test_ = \
+-        random_split(mimic3, [num_train, num_val, len(mimic3) - num_train - num_val])
++    # MIMIC-III semi-synthetic data for train, validation and internal test.
++    features, mimic3 = load_and_process_data(
++        args,
++        device,
++        logging,
++        dataset_name=args.dataset_name,
++    )
++
++    # AmsterdamUMCdb is optional because it is not distributed with T4.
++    amsterdamdb = None
++    if args.external_dataset_name:
++        external_path = os.path.join(
++            args.data_dir,
++            '{}.pkl'.format(args.external_dataset_name),
++        )
++        if os.path.isfile(external_path):
++            _, amsterdamdb = load_and_process_data(
++                args,
++                device,
++                logging,
++                dataset_name=args.external_dataset_name,
++            )
++        else:
++            logging.warning(
++                'Skipping external dataset %s because %s does not exist',
++                args.external_dataset_name,
++                external_path,
++            )
++
++    if args.split_manifest:
++        split_train_, split_valid_, split_test_ = load_shared_split_subsets(
++            mimic3,
++            os.path.join(args.data_dir, '{}.pkl'.format(args.dataset_name)),
++            args.split_manifest,
++        )
++    else:
++        num_train = int(len(mimic3) * 0.7)
++        num_val = int(len(mimic3) * 0.1)
++        split_train_, split_valid_, split_test_ = random_split(
++            mimic3, [num_train, num_val, len(mimic3) - num_train - num_val]
++        )
+ 
+     enc = Encoder(
+         input_dim=len(features),
+         output_dim=1,
+-        x_static_size=4,
++        x_static_size=len(args.static_features),
+         emb_dim=args.emb_size,
+         hid_dim=args.hid_size,
+         n_layers=2,
+@@ -444,7 +501,7 @@ def main():
+         device=device)
+     dec = AttentionDecoder(
+         output_dim=1,
+-        x_static_size=4,
++        x_static_size=len(args.static_features),
+         emb_dim=args.emb_size,
+         hid_dim=args.hid_size,
+         n_layers=2,
+@@ -454,7 +511,17 @@ def main():
+ 
+     if args.aug_ratio and os.path.exists(args.pretrained_model):
+         logging.info("Ratio of aug. samples == > {}".format(args.aug_ratio))
+-        ps_estimator = torch.load(args.pretrained_model)
++        # PyTorch 2.6 defaults to ``weights_only=True``.  T4 checkpoints store
++        # the complete Seq2Seq module, so load the trusted local checkpoint
++        # explicitly as a full object and place it on the active device.
++        ps_estimator = torch.load(
++            args.pretrained_model,
++            map_location=device,
++            weights_only=False,
++        )
++        ps_estimator = ps_estimator.to(device)
++        ps_estimator.device = device
++        ps_estimator.encoder.device = device
+         train_data = batch_aug(split_train_, ps_estimator, args, device)
+     else:
+         train_data = None
+@@ -475,16 +542,17 @@ def main():
+         output_mimic.write('{:.3f},{:.3f},{},{:.3f},{}\n'
+                      .format(deaths_rate_diff, deaths_rate_same, n_diff, deaths_rate_all, n_patient))
+ 
+-        # testing on amsterdamdb
+-        test_dataloader = DataLoader(amsterdamdb, batch_size=args.batch_size, shuffle=False)
+-        test_metric = evaluate(model, test_dataloader, args, mortality_window)
+-        deaths_rate_diff, deaths_rate_same, n_diff, deaths_rate_all, n_patient = test_metric
+-        logging.info('Test AmsterdamDB | Diff. rate {:8.3f} | Same rate {:8.3f} |'
+-                     ' No. Diff. {} | Total rate {:8.3f} | No. patient {}'
+-                     .format(deaths_rate_diff, deaths_rate_same, n_diff, deaths_rate_all, n_patient))
+-        output_amsterdamdb = open(args.output_amsterdamdb + '_{}d_amsterdamdb.csv'.format(mortality_window), 'a')
+-        output_amsterdamdb.write('{:.3f},{:.3f},{},{:.3f},{}\n'
+-                           .format(deaths_rate_diff, deaths_rate_same, n_diff, deaths_rate_all, n_patient))
++        # testing on the optional external dataset
++        if amsterdamdb is not None:
++            test_dataloader = DataLoader(amsterdamdb, batch_size=args.batch_size, shuffle=False)
++            test_metric = evaluate(model, test_dataloader, args, mortality_window)
++            deaths_rate_diff, deaths_rate_same, n_diff, deaths_rate_all, n_patient = test_metric
++            logging.info('Test AmsterdamDB | Diff. rate {:8.3f} | Same rate {:8.3f} |'
++                         ' No. Diff. {} | Total rate {:8.3f} | No. patient {}'
++                         .format(deaths_rate_diff, deaths_rate_same, n_diff, deaths_rate_all, n_patient))
++            output_amsterdamdb = open(args.output_amsterdamdb + '_{}d_amsterdamdb.csv'.format(mortality_window), 'a')
++            output_amsterdamdb.write('{:.3f},{:.3f},{},{:.3f},{}\n'
++                               .format(deaths_rate_diff, deaths_rate_same, n_diff, deaths_rate_all, n_patient))
+ 
+ 
+ 
+diff --git a/model/pre_train.py b/model/pre_train.py
+index bcafcf8..ad431e7 100644
+--- a/model/pre_train.py
++++ b/model/pre_train.py
+@@ -13,7 +13,7 @@ from torch.utils.data.dataset import random_split
+ from torch.utils.data import DataLoader,TensorDataset
+ import torch.nn.functional as F
+ 
+-from dataset import load_and_process_data
++from dataset import load_and_process_data, load_shared_split_subsets
+ from seq2seq import Encoder,AttentionDecoder,Seq2Seq
+ 
+ timestamp = datetime.now().strftime('%Y-%m%d_%H%M%S')
+@@ -32,9 +32,25 @@ def parse_args():
+     parser.add_argument('--hid_size', type=int, default=64)
+     parser.add_argument('--dropout_rate', type=float, default=0.2)
+     parser.add_argument('--batch_size', type=int, default=32)
++    parser.add_argument(
++        '--optimizer',
++        choices=('adamw', 'adam'),
++        default='adamw',
++        help=(
++            'Training optimizer. adamw preserves the released-code behavior; '
++            'adam matches the optimizer named in the paper.'
++        ),
++    )
+     parser.add_argument('--log_file', type=str, default='log/{}/{}_pretrain.log'.format(date, hour))
+     parser.add_argument('--save_model', type=str, default='checkpoints/{}/{}_pretrain.pt'.format(date, hour))
+     parser.add_argument('--data_dir', type=str, default='../data/')
++    parser.add_argument('--header_path', type=str)
++    parser.add_argument('--split_manifest', type=str)
++    parser.add_argument(
++        '--static_features', nargs='+',
++        default=['agegroup', 'heightgroup', 'weightgroup', 'gender'],
++    )
++    parser.add_argument('--dataset_name', type=str, default='synthetic_mimic3')
+     parser.add_argument('--load_cache', type=bool, default=False)
+     parser.add_argument('--seed', type=int, default=66)
+     parser.add_argument('--negative_sample', type=bool, default=False)
+@@ -47,7 +63,10 @@ def train(model, train_dataset, valid_dataset, args):
+     train_dataloader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True)
+     valid_dataloader = DataLoader(valid_dataset, batch_size=args.batch_size, shuffle=True)
+     criterion = F.binary_cross_entropy_with_logits
+-    optimizer = torch.optim.AdamW(model.parameters(), lr=args.learning_rate)
++    if args.optimizer == 'adam':
++        optimizer = torch.optim.Adam(model.parameters(), lr=args.learning_rate)
++    else:
++        optimizer = torch.optim.AdamW(model.parameters(), lr=args.learning_rate)
+     training_steps = args.epochs * len(train_dataloader)
+     scheduler = get_linear_schedule_with_warmup(optimizer, 0, training_steps)
+ 
+@@ -66,6 +85,14 @@ def train(model, train_dataset, valid_dataset, args):
+ 
+             # TODO: calculate loss
+             treatment = treatment[:, args.max_stay:args.max_stay + args.pre_window]
++            # ps_output[:, 0] belongs to the final observed encoder step.  The
++            # causal regimen is the following ``pre_window`` decoder steps.
++            ps_output = ps_output[:, 1:]
++            if ps_output.shape != treatment.shape:
++                raise ValueError(
++                    'Propensity predictions and future-treatment targets are misaligned: '
++                    f'{tuple(ps_output.shape)} versus {tuple(treatment.shape)}'
++                )
+             loss = criterion(ps_output.reshape(-1), treatment.reshape(-1))
+ 
+             # send the loss backwards to compute deltas
+@@ -130,6 +157,12 @@ def evaluate_simple(model, dataloader, args):
+             _, _, _, ps_output, _ = model(x, y, x_demo, treatment, teacher_forcing_ratio=1)
+ 
+             treatment = treatment[:, args.max_stay:args.max_stay + args.pre_window]
++            ps_output = ps_output[:, 1:]
++            if ps_output.shape != treatment.shape:
++                raise ValueError(
++                    'Propensity predictions and future-treatment targets are misaligned: '
++                    f'{tuple(ps_output.shape)} versus {tuple(treatment.shape)}'
++                )
+             t_true = treatment.reshape(-1).to('cpu').detach().data.numpy()
+             t_pred = ps_output.reshape(-1).to('cpu').detach().data.numpy()
+             t_true_all.append(t_true)
+@@ -171,17 +204,30 @@ def main():
+ 
+     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+ 
+-    features, dataset = load_and_process_data(args, device, logging, dataset_name='mimic3')
+-
+-    num_train = int(len(dataset) * 0.7)
+-    num_val = int(len(dataset) * 0.1)
+-    split_train_, split_valid_, split_test_ = \
+-        random_split(dataset, [num_train, num_val, len(dataset) - num_train - num_val])
++    features, dataset = load_and_process_data(
++        args,
++        device,
++        logging,
++        dataset_name=args.dataset_name,
++    )
++
++    if args.split_manifest:
++        split_train_, split_valid_, split_test_ = load_shared_split_subsets(
++            dataset,
++            os.path.join(args.data_dir, '{}.pkl'.format(args.dataset_name)),
++            args.split_manifest,
++        )
++    else:
++        num_train = int(len(dataset) * 0.7)
++        num_val = int(len(dataset) * 0.1)
++        split_train_, split_valid_, split_test_ = random_split(
++            dataset, [num_train, num_val, len(dataset) - num_train - num_val]
++        )
+ 
+     enc = Encoder(
+         input_dim=len(features),
+         output_dim=1,
+-        x_static_size=4,
++        x_static_size=len(args.static_features),
+         emb_dim=args.emb_size,
+         hid_dim=args.hid_size,
+         n_layers=2,
+@@ -189,7 +235,7 @@ def main():
+         device=device)
+     dec = AttentionDecoder(
+         output_dim=1,
+-        x_static_size=4,
++        x_static_size=len(args.static_features),
+         emb_dim=args.emb_size,
+         hid_dim=args.hid_size,
+         n_layers=2,
+diff --git a/simulation/prepare_t4_t50_benchmark.py b/simulation/prepare_t4_t50_benchmark.py
+new file mode 100644
+index 0000000..5fd37ea
+--- /dev/null
++++ b/simulation/prepare_t4_t50_benchmark.py
+@@ -0,0 +1,204 @@
++"""Adapt a leakage-free temporal benchmark to the native T4 pickle contract."""
++
++from __future__ import annotations
++
++import argparse
++import json
++import pickle
++from collections import Counter
++from pathlib import Path
++
++import numpy as np
++
++
++TEMPORAL_FEATURES = tuple(f"x_{index:02d}" for index in range(20))
++T4_STATIC_FEATURES = tuple(f"static_{index:02d}" for index in range(5))
++EXPECTED_TIMESTAMPS = 50
++EXPECTED_SPLITS = {"train": 3500, "validation": 750, "test": 750}
++
++
++def _load_json(path: Path) -> dict:
++    with path.open(encoding="utf-8") as handle:
++        return json.load(handle)
++
++
++def prepare(
++    source_pickle: Path,
++    source_dataset: Path,
++    source_truth: Path,
++    output_dir: Path,
++    dataset_name: str,
++) -> dict[str, object]:
++    with source_pickle.open("rb") as handle:
++        raw = pickle.load(handle)
++    dataset_payload = _load_json(source_dataset)
++    truth_payload = _load_json(source_truth)
++
++    patients = dataset_payload.get("patients", [])
++    truth_patients = truth_payload.get("patients", [])
++    raw_rows = list(raw.values())
++    if not (len(raw_rows) == len(patients) == len(truth_patients) == 5000):
++        raise ValueError(
++            "Expected 5,000 aligned patients in the pickle, dataset, and truth files"
++        )
++
++    truth_by_id = {str(row["patient_id"]): row for row in truth_patients}
++    if len(truth_by_id) != len(truth_patients):
++        raise ValueError("Oracle truth contains duplicate patient IDs")
++
++    converted: dict[str, dict[str, object]] = {}
++    split_rows: list[dict[str, str]] = []
++    converted_truth: list[dict[str, object]] = []
++    split_counts: Counter[str] = Counter()
++
++    for position, (source, patient) in enumerate(zip(raw_rows, patients), start=1):
++        patient_id = str(patient["patient_id"])
++        expected_id = f"SYNTHETIC_{position:06d}"
++        if patient_id != expected_id:
++            raise ValueError(
++                f"Patient order mismatch at row {position}: {patient_id!r} != {expected_id!r}"
++            )
++
++        split = str(patient.get("split", ""))
++        if split not in EXPECTED_SPLITS:
++            raise ValueError(f"Invalid or missing split for {patient_id}: {split!r}")
++        split_counts[split] += 1
++
++        x = np.asarray(source["x"], dtype=np.float32)
++        x_static = np.asarray(source["x_static"], dtype=np.float32)
++        treatment = np.asarray(source["a"], dtype=np.int64)
++        outcomes = np.asarray(source["y"], dtype=np.float32)
++        if x.shape != (len(TEMPORAL_FEATURES), EXPECTED_TIMESTAMPS):
++            raise ValueError(f"Unexpected temporal shape for {patient_id}: {x.shape}")
++        if x_static.shape != (5,):
++            raise ValueError(f"Unexpected static shape for {patient_id}: {x_static.shape}")
++        if treatment.shape != (EXPECTED_TIMESTAMPS,):
++            raise ValueError(f"Unexpected treatment shape for {patient_id}: {treatment.shape}")
++        if outcomes.shape != (2, EXPECTED_TIMESTAMPS):
++            raise ValueError(f"Unexpected outcome shape for {patient_id}: {outcomes.shape}")
++        if not np.isin(treatment, (0, 1)).all():
++            raise ValueError(f"Treatment must be binary for {patient_id}")
++
++        training_row: dict[str, object] = {
++            name: x[index].tolist()
++            for index, name in enumerate(TEMPORAL_FEATURES)
++        }
++        training_row.update(
++            {
++                name: float(x_static[index])
++                for index, name in enumerate(T4_STATIC_FEATURES)
++            }
++        )
++        training_row.update(
++            {
++                "treatment": treatment.tolist(),
++                # The raw pickle stores factual outcomes in row zero. Oracle
++                # potential outcomes remain exclusively in the truth artifact.
++                "outcome": outcomes[0].tolist(),
++                # T4 requires this legacy field, but causal training does not use it.
++                "death": 0,
++            }
++        )
++        converted[patient_id] = training_row
++        split_rows.append({"source_patient_id": patient_id, "split": split})
++
++        oracle = truth_by_id.get(patient_id)
++        if oracle is None or str(oracle.get("split")) != split:
++            raise ValueError(f"Truth/split mismatch for {patient_id}")
++        counterfactual = oracle.get("counterfactual_truth", [])
++        if len(counterfactual) != EXPECTED_TIMESTAMPS:
++            raise ValueError(f"Unexpected oracle horizon for {patient_id}")
++        converted_truth.append(
++            {
++                "source_patient_id": patient_id,
++                "y0": [float(row["y0"]) for row in counterfactual],
++                "y1": [float(row["y1"]) for row in counterfactual],
++                "ite": [float(row["ite"]) for row in counterfactual],
++            }
++        )
++
++    if dict(split_counts) != EXPECTED_SPLITS:
++        raise ValueError(
++            f"Unexpected split counts: {dict(split_counts)} != {EXPECTED_SPLITS}"
++        )
++
++    output_dir.mkdir(parents=True, exist_ok=True)
++    dataset_path = output_dir / f"{dataset_name}.pkl"
++    header_path = output_dir / "header.pkl"
++    split_path = output_dir / "split_manifest.json"
++    truth_path = output_dir / "oracle_truth.json"
++    metadata_path = output_dir / "preparation_metadata.json"
++
++    with dataset_path.open("wb") as handle:
++        pickle.dump(converted, handle, protocol=pickle.HIGHEST_PROTOCOL)
++    with header_path.open("wb") as handle:
++        pickle.dump(list(TEMPORAL_FEATURES), handle, protocol=pickle.HIGHEST_PROTOCOL)
++    split_path.write_text(
++        json.dumps(
++            {
++                "metadata": {
++                    "n_patients": len(converted),
++                    "split_counts": EXPECTED_SPLITS,
++                    "source_dataset": str(source_dataset.resolve()),
++                },
++                "patients": split_rows,
++            },
++            indent=2,
++        )
++        + "\n",
++        encoding="utf-8",
++    )
++    truth_path.write_text(
++        json.dumps(
++            {
++                "metadata": {
++                    "n_patients": len(converted),
++                    "sequence_length": EXPECTED_TIMESTAMPS,
++                    "training_dataset_contains_truth": False,
++                    "source_truth": str(source_truth.resolve()),
++                },
++                "patients": converted_truth,
++            },
++            indent=2,
++        )
++        + "\n",
++        encoding="utf-8",
++    )
++    metadata = {
++        "dataset": str(dataset_path.resolve()),
++        "header": str(header_path.resolve()),
++        "split_manifest": str(split_path.resolve()),
++        "oracle_truth": str(truth_path.resolve()),
++        "patients": len(converted),
++        "timesteps": EXPECTED_TIMESTAMPS,
++        "temporal_features": len(TEMPORAL_FEATURES),
++        "source_static_features": 5,
++        "t4_static_features": 5,
++        "static_features": list(T4_STATIC_FEATURES),
++        "split_counts": dict(split_counts),
++        "oracle_truth_used_for_training": False,
++    }
++    metadata_path.write_text(json.dumps(metadata, indent=2) + "\n", encoding="utf-8")
++    return metadata
++
++
++def parse_args() -> argparse.Namespace:
++    parser = argparse.ArgumentParser(description=__doc__)
++    parser.add_argument("--source-pickle", type=Path, required=True)
++    parser.add_argument("--source-dataset", type=Path, required=True)
++    parser.add_argument("--source-truth", type=Path, required=True)
++    parser.add_argument("--output-dir", type=Path, required=True)
++    parser.add_argument("--dataset-name", default="t4_t50_n5000_seed2027")
++    return parser.parse_args()
++
++
++if __name__ == "__main__":
++    arguments = parse_args()
++    result = prepare(
++        arguments.source_pickle,
++        arguments.source_dataset,
++        arguments.source_truth,
++        arguments.output_dir,
++        arguments.dataset_name,
++    )
++    print(json.dumps(result, indent=2))
+diff --git a/simulation/postprocess_t4_semisynthetic.py b/simulation/postprocess_t4_semisynthetic.py
+new file mode 100644
+index 0000000..7205ff7
+--- /dev/null
++++ b/simulation/postprocess_t4_semisynthetic.py
+@@ -0,0 +1,213 @@
++"""Evaluate a trained T4 checkpoint against external semi-synthetic truth."""
++
++from __future__ import annotations
++
++import argparse
++import csv
++import json
++import logging
++import pickle
++import sys
++from pathlib import Path
++from types import SimpleNamespace
++
++import numpy as np
++import torch
++from torch.utils.data import DataLoader
++
++
++MODEL_DIR = Path(__file__).resolve().parents[1] / "model"
++if str(MODEL_DIR) not in sys.path:
++    sys.path.insert(0, str(MODEL_DIR))
++
++from dataset import load_and_process_data, load_shared_split_subsets, pad_and_truncate  # noqa: E402
++
++
++def _correlation(left: np.ndarray, right: np.ndarray) -> float:
++    if np.std(left) == 0 or np.std(right) == 0:
++        return 0.0
++    return float(np.corrcoef(left.ravel(), right.ravel())[0, 1])
++
++
++def _metrics(truth: np.ndarray, prediction: np.ndarray) -> dict[str, float]:
++    error = prediction - truth
++    truth_std = float(np.std(truth))
++    pehe = float(np.sqrt(np.mean(np.square(error))))
++    return {
++        "pehe": pehe,
++        "normalized_pehe": pehe / truth_std if truth_std > 0 else 0.0,
++        "true_ate": float(np.mean(truth)),
++        "predicted_ate": float(np.mean(prediction)),
++        "ate_absolute_error": float(abs(np.mean(prediction) - np.mean(truth))),
++        "ite_correlation": _correlation(truth, prediction),
++        "effect_sign_accuracy": float(np.mean(np.sign(truth) == np.sign(prediction))),
++    }
++
++
++def run(args: argparse.Namespace) -> dict[str, object]:
++    data_path = Path(args.data_dir) / f"{args.dataset_name}.pkl"
++    with data_path.open("rb") as handle:
++        raw = pickle.load(handle)
++    raw_by_id = {str(patient_id): datum for patient_id, datum in raw.items()}
++    with Path(args.header).open("rb") as handle:
++        feature_names = pickle.load(handle)
++    truth_payload = json.loads(Path(args.truth).read_text())
++    truth_by_id = {
++        str(row["source_patient_id"]): row for row in truth_payload["patients"]
++    }
++    source_ids = [str(value) for value in raw]
++    if set(source_ids) != set(truth_by_id):
++        raise ValueError("T4 oracle truth IDs do not match the training pickle")
++
++    loader_args = SimpleNamespace(
++        data_dir=str(Path(args.data_dir)) + "/",
++        dataset_name=args.dataset_name,
++        header_path=args.header,
++        load_cache=False,
++        max_stay=args.max_stay,
++        pre_window=args.pre_window,
++        negative_sample=False,
++        static_features=args.static_features,
++    )
++    device = torch.device(args.device or ("cuda" if torch.cuda.is_available() else "cpu"))
++    _, dataset = load_and_process_data(
++        loader_args, device, logging.getLogger(__name__), args.dataset_name
++    )
++    subsets = load_shared_split_subsets(dataset, data_path, args.split_manifest)
++    subset_by_name = dict(zip(("train", "validation", "test"), subsets))
++    selected = subset_by_name[args.split]
++
++    padded_factual = []
++    for patient_id, datum in raw.items():
++        factual = np.asarray(datum["outcome"], dtype=float)
++        features = np.column_stack(
++            [np.asarray(datum[name], dtype=float) for name in feature_names]
++        )
++        _, _, _, y_pad, _ = pad_and_truncate(
++            patient_id,
++            features,
++            factual,
++            np.asarray(datum["treatment"], dtype=float),
++            args.max_stay,
++            args.pre_window,
++        )
++        padded_factual.append(y_pad)
++    padded_factual_array = np.asarray(padded_factual, dtype=float)
++    outcome_mean = padded_factual_array.mean(axis=0)[1:]
++    outcome_std = padded_factual_array.std(axis=0, ddof=1)[1:]
++    outcome_std = np.where(outcome_std > 0, outcome_std, 1.0)
++
++    model = torch.load(args.checkpoint, map_location=device, weights_only=False)
++    model = model.to(device)
++    model.device = device
++    model.encoder.device = device
++    model.eval()
++
++    predictions_y0 = []
++    predictions_y1 = []
++    factual_predictions = []
++    with torch.no_grad():
++        for x, x_demo, treatment, _, y, _, _ in DataLoader(
++            selected, batch_size=args.batch_size, shuffle=False
++        ):
++            output, output_cf, _, _, _ = model(
++                x, y, x_demo, treatment, teacher_forcing_ratio=0
++            )
++            assigned = treatment[:, args.max_stay : args.max_stay + args.pre_window]
++            pred_y1 = output * assigned + output_cf * (1 - assigned)
++            pred_y0 = output_cf * assigned + output * (1 - assigned)
++            predictions_y0.append(pred_y0.cpu().numpy())
++            predictions_y1.append(pred_y1.cpu().numpy())
++            factual_predictions.append(output.cpu().numpy())
++
++    pred_y0 = np.concatenate(predictions_y0) * outcome_std + outcome_mean
++    pred_y1 = np.concatenate(predictions_y1) * outcome_std + outcome_mean
++    pred_factual = np.concatenate(factual_predictions) * outcome_std + outcome_mean
++    selected_indices = list(selected.indices)
++    selected_ids = [source_ids[index] for index in selected_indices]
++    truth_y0 = np.asarray(
++        [truth_by_id[value]["y0"][-args.pre_window :] for value in selected_ids],
++        dtype=float,
++    )
++    truth_y1 = np.asarray(
++        [truth_by_id[value]["y1"][-args.pre_window :] for value in selected_ids],
++        dtype=float,
++    )
++    factual = np.asarray(
++        [raw_by_id[value]["outcome"][-args.pre_window :] for value in selected_ids],
++        dtype=float,
++    )
++    truth_ite = truth_y1 - truth_y0
++    predicted_ite = pred_y1 - pred_y0
++    report = {
++        "model": "T4",
++        "checkpoint": str(Path(args.checkpoint).resolve()),
++        "split": args.split,
++        "n_patients": len(selected_ids),
++        "timestamps": list(
++            range(
++                len(truth_by_id[selected_ids[0]]["y0"]) - args.pre_window,
++                len(truth_by_id[selected_ids[0]]["y0"]),
++            )
++        ),
++        "causal_effect": _metrics(truth_ite, predicted_ite),
++        "factual_outcome": {
++            "rmse": float(np.sqrt(np.mean(np.square(pred_factual - factual)))),
++            "mae": float(np.mean(np.abs(pred_factual - factual))),
++        },
++        "methodology": {
++            "counterfactual_truth_used_during_training": False,
++            "shared_split_manifest": str(Path(args.split_manifest).resolve()),
++            "estimand": "conditional point-treatment effect Y_t(1)-Y_t(0) at observed history",
++            "static_features": list(args.static_features),
++        },
++    }
++    rows = []
++    for offset, timestamp in enumerate(report["timestamps"]):
++        row = {"timestamp": timestamp, **_metrics(truth_ite[:, offset], predicted_ite[:, offset])}
++        rows.append(row)
++
++    destination = Path(args.output_dir)
++    destination.mkdir(parents=True, exist_ok=True)
++    (destination / "report.json").write_text(json.dumps(report, indent=2) + "\n")
++    with (destination / "metrics_by_timestep.csv").open("w", newline="") as handle:
++        writer = csv.DictWriter(handle, fieldnames=list(rows[0]))
++        writer.writeheader()
++        writer.writerows(rows)
++    causal = report["causal_effect"]
++    (destination / "summary.md").write_text(
++        f"# T4 semi-synthetic {report['split']} evaluation\n\n"
++        f"- Patients: {report['n_patients']}\n"
++        f"- PEHE: {causal['pehe']:.6f}\n"
++        f"- Normalized PEHE: {causal['normalized_pehe']:.6f}\n"
++        f"- ATE absolute error: {causal['ate_absolute_error']:.6f}\n"
++        f"- ITE correlation: {causal['ite_correlation']:.6f}\n"
++    )
++    return report
++
++
++def parse_args() -> argparse.Namespace:
++    parser = argparse.ArgumentParser(description=__doc__)
++    parser.add_argument("--data-dir", required=True)
++    parser.add_argument("--dataset-name", required=True)
++    parser.add_argument("--header", required=True)
++    parser.add_argument(
++        "--static-features",
++        nargs="+",
++        default=["agegroup", "heightgroup", "weightgroup", "gender"],
++    )
++    parser.add_argument("--truth", required=True)
++    parser.add_argument("--split-manifest", required=True)
++    parser.add_argument("--checkpoint", required=True)
++    parser.add_argument("--output-dir", required=True)
++    parser.add_argument("--split", choices=("train", "validation", "test"), default="test")
++    parser.add_argument("--max-stay", type=int, default=16)
++    parser.add_argument("--pre-window", type=int, default=7)
++    parser.add_argument("--batch-size", type=int, default=128)
++    parser.add_argument("--device")
++    return parser.parse_args()
++
++
++if __name__ == "__main__":
++    result = run(parse_args())
++    print(json.dumps(result["causal_effect"], indent=2))

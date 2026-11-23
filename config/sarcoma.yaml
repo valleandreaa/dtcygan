@@ -1,0 +1,89 @@
+data_contract: surgery_rt_preop_two_arm
+seq_len: 8
+batch_size: 32
+epochs: 100
+generator_lr: 4.0e-5
+discriminator_lr: 5.0e-5
+beta1: 0.5
+beta2: 0.999
+cycle_weight: 10.0
+identity_weight: 10.0
+lambda_outcome: 2.0
+factual_weight: 5.0
+condition_weight: 0.0
+lambda_regimen_delivery: 5.0
+lambda_generated_outcome: 1.0
+lambda_rt_feasibility: 1.0
+regimen_delivery_features:
+  all_strategies: surgery_this_interval
+  preoperative_rt_surgery: preoperative_rt_this_interval
+outcome_positive_weight: null
+outcome_positive_weight_cap: 20.0
+rt_feasibility:
+  activation_features: [preoperative_rt_this_interval]
+  parameter_ranges:
+    radiotherapy_total_dose_gy: [36.0, 66.0]
+    radiotherapy_num_fractions: [25.0, 33.0]
+generator_hidden: 256
+discriminator_hidden: 128
+outcome_hidden: 128
+layers: 3
+seed: 42
+split_seed: 42
+test_fraction: 0.20
+device: null
+adv_loss: lsgan
+criterion: l1
+architecture: lstm
+counterfactual_mode: two_arm_alternative
+conditioning_contract: two_arm_static
+broadcast_actual_treatment: true
+require_explicit_splits: true
+temporal_alignment:
+  contract_version: 2
+  treatment_scope: preoperative_only
+  postoperative_policy: exclude_patient
+  prediction_landmark: interval_start
+  history_lag_intervals: 1
+  same_interval_unknown_order: mask
+  outcome_uses_static_regimen: false
+  recurrence_network: forward_causal
+causal_weighting:
+  enabled: true
+  method: primary_overlap
+  adjustment_covariates: [biopsy_grading, who_diagnosis_code,
+    body_location_group, anatomic_region_grouping, initial_size, any_whoops]
+  stage: preoperative_rt
+  ineligible_policy: exclude
+  normalization: mean_one
+  require_supported: true
+  target_population: overlap_population
+  apply_to: [discriminator, generator_adversarial, cycle, identity, outcome]
+  adjustment_supported: true
+  exploratory_only: false
+cohort_contract:
+  expected_n: 433
+  expected_excluded_postoperative_rt: 31
+  expected_excluded_combined_rt: 7
+  require_temporal_order_fields: true
+feature_groups:
+  baseline:
+    numeric: [initial_size, age_at_diagnosis]
+    binary: [any_whoops]
+    categorical: [who_diagnosis_code, body_location_group,
+      anatomic_region_grouping, whoops_margin_status]
+    ordinal:
+      biopsy_grading: {G1: 1, G2: 2, G3: 3}
+  state:
+    numeric: [interval_scaled, tumour_size_before_surgery,
+      number_of_reoperations, lag_reoperation_count]
+    categorical: [pathologist_margin_judgment, lag_margin_status,
+      lag_disease_status]
+  treatment:
+    binary: [surgery_this_interval, preoperative_rt_this_interval]
+    numeric: [radiotherapy_total_dose_gy, radiotherapy_num_fractions]
+    categorical: [surgery_type, radiotherapy_indication, radiotherapy_type]
+    version_features: [radiotherapy_total_dose_gy, radiotherapy_num_fractions,
+      radiotherapy_indication, radiotherapy_type]
+  outcome:
+    binary: [local_recurrence]
